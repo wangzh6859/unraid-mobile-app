@@ -73,12 +73,21 @@ jobs:
           ANDROID_KEY_ALIAS: "unraid_alias"
           ANDROID_KEY_PASSWORD: "permanent_password_123"
 
-      # 5. 发布
+      # 5. 发布 Release (修正版)
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: bin/*.apk
+          # 修改这里：使用更强的通配符匹配 bin 目录下所有的 .apk 文件
+          files: |
+            bin/*.apk
           tag_name: ${{ steps.next_version.outputs.tag }}
           name: Release ${{ steps.next_version.outputs.tag }}
+          body: |
+            自动构建更新
+            版本号: ${{ steps.next_version.outputs.tag }}
+          draft: false
+          prerelease: false
+          # 增加这个配置：如果没有找到 apk，让 Action 报错，方便我们排查
+          fail_on_unmatched_files: true 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
