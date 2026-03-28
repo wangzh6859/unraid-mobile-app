@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.jcraft.jsch.JSch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,31 +14,54 @@ import java.util.Properties
 
 class MainActivity : AppCompatActivity() {
     // ==========================================
-    // 配置区域：请在这里填入你 Unraid 服务器的真实信息
+    // 请再次确认你的 Unraid 账号密码
     // ==========================================
-    private val host = "192.168.1.100"  // 你的 Unraid IP
-    private val user = "root"           // 默认用户名
+    private val host = "192.168.1.100"  // 你的 IP
+    private val user = "root"           // 你的用户名
     private val password = "your_password" // 你的密码
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 隐藏顶部默认的丑陋导航栏
+        supportActionBar?.hide() 
         setContentView(R.layout.activity_main)
 
         val btnRefresh = findViewById<Button>(R.id.btnRefresh)
-        val tvStatus = findViewById<TextView>(R.id.tvStatus)
+        val tvUptime = findViewById<TextView>(R.id.tvUptime)
+        
+        val progressCpu = findViewById<CircularProgressIndicator>(R.id.progressCpu)
+        val tvCpuPercent = findViewById<TextView>(R.id.tvCpuPercent)
+        
+        val progressMem = findViewById<CircularProgressIndicator>(R.id.progressMem)
+        val tvMemPercent = findViewById<TextView>(R.id.tvMemPercent)
 
         btnRefresh.setOnClickListener {
-            tvStatus.text = "正在连接服务器..."
+            btnRefresh.text = "正在连接..."
             btnRefresh.isEnabled = false
 
-            // 使用 Kotlin 协程在后台线程执行网络请求，防止界面卡死
             CoroutineScope(Dispatchers.IO).launch {
-                // 执行获取运行时间和内存的 Linux 命令
-                val result = executeSshCommand("uptime -p\necho '---'\nfree -m | grep Mem")
+                // 1. 获取运行时间
+                val uptime = executeSshCommand("uptime -p").replace("up", "运行时间:").trim()
                 
-                // 切换回主线程更新界面 UI
+                // 2. 尝试获取 CPU 负载 (这里用简单的 top 命令提取)
+                val cpuRaw = executeSshCommand("top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'").trim()
+                val cpuValue = cpuRaw.toFloatOrNull()?.toInt() ?: 0
+
+                // 3. 尝试获取内存使用率
+                val memRaw = executeSshCommand("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'").trim()
+                val memValue = memRaw.toFloatOrNull()?.toInt() ?: 0
+
+                // 切换回主线程更新漂亮的 UI
                 withContext(Dispatchers.Main) {
-                    tvStatus.text = result
+                    tvUptime.text = uptime
+                    
+                    progressCpu.setProgressCompat(cpuValue, true)
+                    tvCpuPercent.text = "$cpuValue%"
+                    
+                    progressMem.setProgressCompat(memValue, true)
+                    tvMemPercent.text = "$memValue%"
+
+                    btnRefresh.text = "点击获取实时数据"
                     btnRefresh.isEnabled = true
                 }
             }
@@ -49,29 +73,25 @@ class MainActivity : AppCompatActivity() {
             val jsch = JSch()
             val session = jsch.getSession(user, host, 22)
             session.setPassword(password)
-            
-            // 忽略未知的 SSH 密钥警告
             val config = Properties()
             config.put("StrictHostKeyChecking", "no")
             session.setConfig(config)
-            session.connect(5000) // 5秒超时
+            session.connect(5000)
 
-            // 打开执行命令的通道
             val channel = session.openChannel("exec") as com.jcraft.jsch.ChannelExec
             channel.setCommand(command)
             val inStream = channel.inputStream
             channel.connect()
 
-            // 读取服务器返回的结果
             val reader = inStream.bufferedReader()
             val output = reader.readText()
 
             channel.disconnect()
             session.disconnect()
 
-            "✅ 连接成功！\n\n$output"
+            output
         } catch (e: Exception) {
-            "❌ 连接失败:\n${e.message}"
+            "Error"
         }
     }
 }
