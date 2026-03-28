@@ -1,10 +1,17 @@
 package com.example.unraidmanager
 
+import android.graphics.Color
 import android.os.Bundle
+import android.view.Gravity
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.google.android.material.progressindicator.CircularProgressIndicator
+import androidx.fragment.app.Fragment
+import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.jcraft.jsch.JSch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,55 +20,91 @@ import kotlinx.coroutines.withContext
 import java.util.Properties
 
 class MainActivity : AppCompatActivity() {
-    // ==========================================
-    // 请再次确认你的 Unraid 账号密码
-    // ==========================================
-    private val host = "192.168.1.100"  // 你的 IP
-    private val user = "root"           // 你的用户名
-    private val password = "your_password" // 你的密码
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 隐藏顶部默认的丑陋导航栏
-        supportActionBar?.hide() 
+        supportActionBar?.hide()
         setContentView(R.layout.activity_main)
 
-        val btnRefresh = findViewById<Button>(R.id.btnRefresh)
-        val tvUptime = findViewById<TextView>(R.id.tvUptime)
+        val bottomNav = findViewById<BottomNavigationView>(R.id.bottom_nav)
+
+        // 默认加载首页
+        if (savedInstanceState == null) {
+            supportFragmentManager.beginTransaction()
+                .replace(R.id.fragment_container, HomeFragment())
+                .commit()
+        }
+
+        // 监听底部导航栏的点击事件，切换不同的页面
+        bottomNav.setOnItemSelectedListener { item ->
+            val selectedFragment: Fragment = when (item.itemId) {
+                R.id.nav_home -> HomeFragment()
+                R.id.nav_files -> PlaceholderFragment("文件管理页面\n(建设中...)")
+                R.id.nav_media -> PlaceholderFragment("影音中心页面\n(建设中...)")
+                R.id.nav_settings -> PlaceholderFragment("系统设置页面\n(建设中...)")
+                else -> HomeFragment()
+            }
+            supportFragmentManager.beginTransaction()
+                .replace(R.id.fragment_container, selectedFragment)
+                .commit()
+            true
+        }
+    }
+}
+
+// ==========================================
+// 首页逻辑
+// ==========================================
+class HomeFragment : Fragment() {
+    // 删除了原来写死的配置，改为稍后动态读取
+    private var host = ""
+    private var user = ""
+    private var password = ""
+
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
+        return inflater.inflate(R.layout.fragment_home, container, false)
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
         
-        val progressCpu = findViewById<CircularProgressIndicator>(R.id.progressCpu)
-        val tvCpuPercent = findViewById<TextView>(R.id.tvCpuPercent)
+        // 🌟 从本地配置中读取账号密码
+        val sharedPref = requireActivity().getSharedPreferences("UnraidPrefs", Context.MODE_PRIVATE)
+        host = sharedPref.getString("HOST", "") ?: ""
+        user = sharedPref.getString("USER", "") ?: ""
+        password = sharedPref.getString("PASSWORD", "") ?: ""
+
+        val tvUptime = view.findViewById<TextView>(R.id.tvUptime)
+        val tvCpu = view.findViewById<TextView>(R.id.tvCpu)
+        val tvMem = view.findViewById<TextView>(R.id.tvMem)
+        val btnRefresh = view.findViewById<Button>(R.id.btnRefresh)
         
-        val progressMem = findViewById<CircularProgressIndicator>(R.id.progressMem)
-        val tvMemPercent = findViewById<TextView>(R.id.tvMemPercent)
+        view.findViewById<Button>(R.id.btnDocker).setOnClickListener {
+            Toast.makeText(context, "即将进入 Docker 管理页面", Toast.LENGTH_SHORT).show()
+        }
+        view.findViewById<Button>(R.id.btnVm).setOnClickListener {
+            Toast.makeText(context, "即将进入 虚拟机 管理页面", Toast.LENGTH_SHORT).show()
+        }
 
         btnRefresh.setOnClickListener {
-            btnRefresh.text = "正在连接..."
+            if (host.isEmpty()) {
+                Toast.makeText(context, "未找到服务器配置，请重新登录", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            btnRefresh.text = "正在获取..."
             btnRefresh.isEnabled = false
 
             CoroutineScope(Dispatchers.IO).launch {
-                // 1. 获取运行时间
                 val uptime = executeSshCommand("uptime -p").replace("up", "运行时间:").trim()
-                
-                // 2. 尝试获取 CPU 负载 (这里用简单的 top 命令提取)
                 val cpuRaw = executeSshCommand("top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'").trim()
-                val cpuValue = cpuRaw.toFloatOrNull()?.toInt() ?: 0
+                val memRaw = executeSshCommand("free -m | awk 'NR==2{printf \"%.0f\", $3*100/$2 }'").trim()
 
-                // 3. 尝试获取内存使用率
-                val memRaw = executeSshCommand("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'").trim()
-                val memValue = memRaw.toFloatOrNull()?.toInt() ?: 0
-
-                // 切换回主线程更新漂亮的 UI
                 withContext(Dispatchers.Main) {
                     tvUptime.text = uptime
-                    
-                    progressCpu.setProgressCompat(cpuValue, true)
-                    tvCpuPercent.text = "$cpuValue%"
-                    
-                    progressMem.setProgressCompat(memValue, true)
-                    tvMemPercent.text = "$memValue%"
-
-                    btnRefresh.text = "点击获取实时数据"
+                    tvCpu.text = "${cpuRaw.toFloatOrNull()?.toInt() ?: 0}%"
+                    tvMem.text = "${memRaw.toFloatOrNull()?.toInt() ?: 0}%"
+                    btnRefresh.text = "刷新数据"
                     btnRefresh.isEnabled = true
                 }
             }
@@ -92,6 +135,21 @@ class MainActivity : AppCompatActivity() {
             output
         } catch (e: Exception) {
             "Error"
+        }
+    }
+}
+
+// ==========================================
+// 占位页面 (用于文件、影音、设置页面的临时展示)
+// ==========================================
+class PlaceholderFragment(private val text: String) : Fragment() {
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        return TextView(context).apply {
+            this.text = this@PlaceholderFragment.text
+            textSize = 24f
+            setTextColor(Color.GRAY)
+            gravity = Gravity.CENTER
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
     }
 }
