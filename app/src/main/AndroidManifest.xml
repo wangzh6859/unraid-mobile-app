@@ -6,7 +6,7 @@
         android:allowBackup="true"
         android:label="Unraid管理器"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+        android:theme="@style/Theme.MaterialComponents.Light.NoActionBar"> 
         <activity
             android:name=".MainActivity"
             android:exported="true">
