@@ -1,0 +1,52 @@
+name: Build and Auto Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # --- 核心逻辑：尝试从缓存恢复签名文件 ---
+      - name: Restore Keystore Cache
+        id: cache-keystore
+        uses: actions/cache@v3
+        with:
+          path: my.keystore
+          key: keystore-global-unique-key # 只要这个 key 不变，签名就永远固定
+
+      # --- 如果缓存不存在，则随机生成一个 ---
+      - name: Generate Random Keystore
+        if: steps.cache-keystore.outputs.cache-hit != 'true'
+        run: |
+          keytool -genkey -noprompt \
+            -keystore my.keystore \
+            -alias unraid_alias \
+            -storepass "permanent_password_123" \
+            -keypass "permanent_password_123" \
+            -dname "CN=UnraidApp, OU=Dev, O=Self, L=Cloud, S=Cloud, C=CN" \
+            -keyalg RSA -keysize 2048 -validity 10000
+
+      - name: Build with Buildozer
+        uses: ArtemSerebrennkov/buildozer-action@v1
+        with:
+          buildozer_version: master
+          command: buildozer android release
+        env:
+          VERSION: ${{ github.ref_name }}
+          # 这里的密码必须和上面生成的脚本一致
+          ANDROID_KEYSTORE_PASSWORD: "permanent_password_123"
+          ANDROID_KEY_ALIAS: "unraid_alias"
+          ANDROID_KEY_PASSWORD: "permanent_password_123"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: bin/*.apk
+          name: Release ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
