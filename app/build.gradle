@@ -48,4 +48,6 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
     // 引入 JSch 库（用于通过 SSH 连接 Unraid 服务器）
     implementation 'com.jcraft:jsch:0.1.55'
+    // 👇 新增这一行：安卓官方下拉刷新组件库
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
 }

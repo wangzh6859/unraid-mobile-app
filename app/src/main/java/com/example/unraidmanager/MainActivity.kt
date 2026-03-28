@@ -73,7 +73,6 @@ class HomeFragment : Fragment() {
     private var password = ""
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
-        // 🛡️ 防闪退保护：检查布局文件是否正确
         return try {
             inflater.inflate(R.layout.fragment_home, container, false)
         } catch (e: Exception) {
@@ -91,10 +90,11 @@ class HomeFragment : Fragment() {
             user = sharedPref.getString("USER", "") ?: ""
             password = sharedPref.getString("PASSWORD", "") ?: ""
 
+            val swipeRefresh = view.findViewById<androidx.swiperefreshlayout.widget.SwipeRefreshLayout>(R.id.swipeRefresh)
             val tvUptime = view.findViewById<TextView>(R.id.tvUptime)
             val tvCpu = view.findViewById<TextView>(R.id.tvCpu)
             val tvMem = view.findViewById<TextView>(R.id.tvMem)
-            val btnRefresh = view.findViewById<Button>(R.id.btnRefresh)
+            val statusDot = view.findViewById<View>(R.id.statusDot)
             
             view.findViewById<Button>(R.id.btnDocker)?.setOnClickListener {
                 Toast.makeText(context, "即将进入 Docker 管理页面", Toast.LENGTH_SHORT).show()
@@ -103,29 +103,55 @@ class HomeFragment : Fragment() {
                 Toast.makeText(context, "即将进入 虚拟机 管理页面", Toast.LENGTH_SHORT).show()
             }
 
-            btnRefresh?.setOnClickListener {
+            // 提取出的获取数据逻辑函数
+            fun fetchServerData() {
                 if (host.isEmpty()) {
-                    Toast.makeText(context, "未找到服务器配置，请重新登录", Toast.LENGTH_SHORT).show()
-                    return@setOnClickListener
+                    Toast.makeText(context, "未找到服务器配置", Toast.LENGTH_SHORT).show()
+                    swipeRefresh.isRefreshing = false
+                    return
                 }
 
-                btnRefresh.text = "正在获取..."
-                btnRefresh.isEnabled = false
+                // 刷新时，指示灯变成灰色
+                statusDot.background.setTint(Color.parseColor("#E0E0E0"))
 
                 CoroutineScope(Dispatchers.IO).launch {
-                    val uptime = executeSshCommand("uptime -p").replace("up", "运行时间:").trim()
-                    val cpuRaw = executeSshCommand("top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'").trim()
-                    val memRaw = executeSshCommand("free -m | awk 'NR==2{printf \"%.0f\", $3*100/$2 }'").trim()
+                    val uptimeResult = executeSshCommand("uptime -p")
+                    
+                    // 如果返回的结果以 Error 开头，说明连接失败
+                    val isSuccess = !uptimeResult.startsWith("Error")
+                    
+                    val uptime = if (isSuccess) uptimeResult.replace("up", "运行时间:").trim() else "连接失败"
+                    val cpuRaw = if (isSuccess) executeSshCommand("top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'").trim() else "--"
+                    val memRaw = if (isSuccess) executeSshCommand("free -m | awk 'NR==2{printf \"%.0f\", $3*100/$2 }'").trim() else "--"
 
                     withContext(Dispatchers.Main) {
                         tvUptime?.text = uptime
-                        tvCpu?.text = "${cpuRaw.toFloatOrNull()?.toInt() ?: 0}%"
-                        tvMem?.text = "${memRaw.toFloatOrNull()?.toInt() ?: 0}%"
-                        btnRefresh.text = "刷新数据"
-                        btnRefresh.isEnabled = true
+                        tvCpu?.text = if (isSuccess) "${cpuRaw.toFloatOrNull()?.toInt() ?: 0}%" else "--%"
+                        tvMem?.text = if (isSuccess) "${memRaw.toFloatOrNull()?.toInt() ?: 0}%" else "--%"
+                        
+                        // 🌟 核心：成功变绿灯，失败变红灯
+                        if (isSuccess) {
+                            statusDot.background.setTint(Color.parseColor("#4CAF50")) // 绿色
+                        } else {
+                            statusDot.background.setTint(Color.parseColor("#F44336")) // 红色
+                            Toast.makeText(context, uptimeResult, Toast.LENGTH_LONG).show() // 弹出具体报错
+                        }
+                        
+                        // 停止下拉刷新的转圈动画
+                        swipeRefresh.isRefreshing = false
                     }
                 }
             }
+
+            // 监听下拉动作
+            swipeRefresh.setOnRefreshListener {
+                fetchServerData()
+            }
+
+            // 页面刚打开时，自动触发一次刷新
+            swipeRefresh.isRefreshing = true
+            fetchServerData()
+
         } catch (e: Exception) {
             Toast.makeText(context, "首页代码运行错误: ${e.message}", Toast.LENGTH_LONG).show()
         }
