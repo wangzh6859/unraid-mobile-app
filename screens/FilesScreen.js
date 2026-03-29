@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useLayoutEffect } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, ScrollView, Modal, BackHandler, Pressable, RefreshControl } from 'react-native';
+// 💡 注意这里引入了 Image 组件
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, ScrollView, Modal, BackHandler, Pressable, RefreshControl, Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Folder, Save, Server, Key, User, File, ChevronLeft, LogOut, HardDrive, Plus, ArrowDownUp, FolderPlus, FilePlus, UploadCloud, DownloadCloud } from 'lucide-react-native';
+import { Folder, Save, Server, Key, User, File, ChevronLeft, LogOut, HardDrive, Plus, ArrowDownUp, FolderPlus, FilePlus, UploadCloud, DownloadCloud, X, Download } from 'lucide-react-native';
 import base64 from 'base-64';
 import { XMLParser } from 'fast-xml-parser';
 import * as DocumentPicker from 'expo-document-picker';
@@ -19,14 +20,15 @@ export default function FilesScreen({ navigation }) {
   const [currentPath, setCurrentPath] = useState(''); 
   const [fileList, setFileList] = useState([]);
   const [isLoadingList, setIsLoadingList] = useState(false);
-  
-  // 💡 新增：下拉刷新的状态
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // 弹窗与传输状态
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isTransferVisible, setIsTransferVisible] = useState(false);
   const [transfers, setTransfers] = useState([]); 
+
+  // 💡 新增：预览控件状态
+  const [previewItem, setPreviewItem] = useState(null);
 
   useEffect(() => {
     const loadConfig = async () => {
@@ -143,7 +145,6 @@ export default function FilesScreen({ navigation }) {
     if (isConnected && currentPath) fetchDirectory(currentPath);
   }, [isConnected]);
 
-  // 💡 新增：下拉刷新处理函数
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
     await fetchDirectory(currentPath);
@@ -162,12 +163,14 @@ export default function FilesScreen({ navigation }) {
 
   useEffect(() => {
     const onBackPress = () => {
+      // 💡 如果预览开着，按返回键先关预览
+      if (previewItem) { setPreviewItem(null); return true; }
       if (isConnected && !isAtRoot) { goBack(); return true; }
       return false; 
     };
     BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => BackHandler.removeEventListener('hardwareBackPress', onBackPress);
-  }, [isConnected, isAtRoot, goBack]);
+  }, [isConnected, isAtRoot, goBack, previewItem]);
 
   const disconnect = async () => {
     await AsyncStorage.removeItem('@dav_pass');
@@ -175,9 +178,6 @@ export default function FilesScreen({ navigation }) {
     setIsConnected(false);
   };
 
-  // ==========================================
-  // 🚀 核心上传逻辑：彻底修复 URL 拼接错误
-  // ==========================================
   const handleUpload = async () => {
     setIsMenuVisible(false);
     try {
@@ -189,7 +189,6 @@ export default function FilesScreen({ navigation }) {
         setTransfers(prev => [newTransfer, ...prev]);
         setIsTransferVisible(true);
 
-        // 💡 修复拼接逻辑：获取根域名 + 绝对路径 + 文件名
         const originMatch = davUrl.match(/^(https?:\/\/[^\/]+)/);
         const origin = originMatch ? originMatch[1] : '';
         const targetDir = currentPath.endsWith('/') ? currentPath : currentPath + '/';
@@ -204,7 +203,7 @@ export default function FilesScreen({ navigation }) {
 
         if (uploadRes.status === 201 || uploadRes.status === 204 || uploadRes.status === 200) {
           setTransfers(prev => prev.map(t => t.id === newTransfer.id ? { ...t, status: '✅ 成功' } : t));
-          fetchDirectory(currentPath); // 上传完立刻刷新列表
+          fetchDirectory(currentPath); 
         } else {
           setTransfers(prev => prev.map(t => t.id === newTransfer.id ? { ...t, status: `❌ 失败 (${uploadRes.status})` } : t));
         }
@@ -221,6 +220,7 @@ export default function FilesScreen({ navigation }) {
         Alert.alert('已取消', '你需要授权一个文件夹才能保存文件');
         return;
       }
+      setPreviewItem(null); // 关闭预览界面
 
       const newTransfer = { id: Date.now(), name: item.name, type: '下载', status: '正在传输...' };
       setTransfers(prev => [newTransfer, ...prev]);
@@ -241,12 +241,11 @@ export default function FilesScreen({ navigation }) {
 
       setTransfers(prev => prev.map(t => t.id === newTransfer.id ? { ...t, status: '✅ 成功' } : t));
     } catch (error) {
-      Alert.alert('下载失败', '文件可能过大或网络连接中断');
+      Alert.alert('下载失败', '网络连接中断');
       setTransfers(prev => prev.map(t => t.name === item.name && t.status === '正在传输...' ? { ...t, status: '❌ 失败' } : t));
     }
   };
 
-  // 💡 新增：核心删除逻辑 (WebDAV DELETE 协议)
   const handleDelete = (item) => {
     Alert.alert('确认删除', `确定要彻底删除 ${item.isFolder ? '文件夹' : '文件'} \n"${item.name}" 吗？\n此操作不可恢复！`, [
       { text: '取消', style: 'cancel' },
@@ -257,19 +256,11 @@ export default function FilesScreen({ navigation }) {
             const deleteUrl = origin + item.href;
             const credentials = base64.encode(`${username}:${password}`);
 
-            const res = await fetch(deleteUrl, {
-              method: 'DELETE',
-              headers: { 'Authorization': `Basic ${credentials}` }
-            });
+            const res = await fetch(deleteUrl, { method: 'DELETE', headers: { 'Authorization': `Basic ${credentials}` } });
 
-            if (res.status === 200 || res.status === 204) {
-              fetchDirectory(currentPath); // 删完立刻刷新列表
-            } else {
-              Alert.alert('删除失败', `服务器拒绝执行 (HTTP ${res.status})\n请检查 AList 中该存储是否开启了写入权限。`);
-            }
-          } catch (error) {
-            Alert.alert('删除出错', error.message);
-          }
+            if (res.status === 200 || res.status === 204) { fetchDirectory(currentPath); } 
+            else { Alert.alert('删除失败', `服务器拒绝执行 (HTTP ${res.status})`); }
+          } catch (error) { Alert.alert('删除出错', error.message); }
         }
       }
     ]);
@@ -279,11 +270,20 @@ export default function FilesScreen({ navigation }) {
     if (item.isFolder) {
       fetchDirectory(item.href);
     } else {
-      Alert.alert('文件操作', `名称：${item.name}\n大小：${formatBytes(item.size)}`, [
-        { text: '取消', style: 'cancel' },
-        { text: '下载到手机', onPress: () => handleDownload(item) }
-      ]);
+      // 💡 核心改变：不弹 Alert，直接调用预览组件
+      setPreviewItem(item);
     }
+  };
+
+  // 💡 辅助函数：判断是不是图片
+  const isImageFile = (filename) => {
+    return /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(filename);
+  };
+
+  // 💡 辅助函数：获取文件的直链下载地址
+  const getDirectUrl = (href) => {
+    const originMatch = davUrl.match(/^(https?:\/\/[^\/]+)/);
+    return (originMatch ? originMatch[1] : '') + href;
   };
 
   useLayoutEffect(() => {
@@ -322,25 +322,15 @@ export default function FilesScreen({ navigation }) {
   if (!isConnected) {
     return (
       <KeyboardAvoidingView style={styles.center} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        {/* ...配置页UI保持不变... */}
         <View style={styles.setupCard}>
           <HardDrive color="#3b82f6" size={48} style={{ alignSelf: 'center', marginBottom: 16 }} />
           <Text style={styles.setupTitle}>连接 WebDAV</Text>
           <Text style={styles.setupSub}>请输入 Unraid AList 的 WebDAV 服务详情</Text>
-          <View style={styles.inputContainer}>
-            <Server color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput style={styles.input} placeholder="https://alist.bbb.ccc:123" placeholderTextColor="#6b7280" value={davUrl} onChangeText={setDavUrl} autoCapitalize="none" keyboardType="url" />
-          </View>
-          <View style={styles.inputContainer}>
-            <User color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput style={styles.input} placeholder="用户名" placeholderTextColor="#6b7280" value={username} onChangeText={setUsername} autoCapitalize="none" />
-          </View>
-          <View style={styles.inputContainer}>
-            <Key color="#9ca3af" size={20} style={styles.inputIcon} />
-            <TextInput style={styles.input} placeholder="密码" placeholderTextColor="#6b7280" value={password} onChangeText={setPassword} secureTextEntry={true} />
-          </View>
-          <TouchableOpacity style={styles.saveBtn} onPress={testConnection} disabled={isTesting}>
-            {isTesting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.saveBtnText}>测试并连接</Text>}
-          </TouchableOpacity>
+          <View style={styles.inputContainer}><Server color="#9ca3af" size={20} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="https://alist.bbb.ccc:123" placeholderTextColor="#6b7280" value={davUrl} onChangeText={setDavUrl} autoCapitalize="none" keyboardType="url" /></View>
+          <View style={styles.inputContainer}><User color="#9ca3af" size={20} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="用户名" placeholderTextColor="#6b7280" value={username} onChangeText={setUsername} autoCapitalize="none" /></View>
+          <View style={styles.inputContainer}><Key color="#9ca3af" size={20} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="密码" placeholderTextColor="#6b7280" value={password} onChangeText={setPassword} secureTextEntry={true} /></View>
+          <TouchableOpacity style={styles.saveBtn} onPress={testConnection} disabled={isTesting}>{isTesting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.saveBtnText}>测试并连接</Text>}</TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
     );
@@ -354,27 +344,13 @@ export default function FilesScreen({ navigation }) {
         <ScrollView 
           style={styles.listScroll} 
           contentContainerStyle={styles.listContent}
-          /* 💡 新增：原生下拉刷新控件 */
-          refreshControl={
-            <RefreshControl 
-              refreshing={isRefreshing} 
-              onRefresh={onRefresh} 
-              tintColor="#3b82f6" 
-              colors={['#3b82f6']} 
-            />
-          }
+          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor="#3b82f6" colors={['#3b82f6']} />}
         >
           {fileList.length === 0 ? (
             <View style={styles.listCenter}><Text style={styles.emptyText}>空文件夹，下拉可刷新</Text></View>
           ) : (
             fileList.map((item, index) => (
-              <TouchableOpacity 
-                key={index} 
-                style={styles.fileRow} 
-                onPress={() => handleFileClick(item)}
-                onLongPress={() => handleDelete(item)} // 💡 新增：长按触发删除
-                delayLongPress={500}
-              >
+              <TouchableOpacity key={index} style={styles.fileRow} onPress={() => handleFileClick(item)} onLongPress={() => handleDelete(item)} delayLongPress={500}>
                 <View style={styles.fileIconBox}>
                   {item.isFolder ? <Folder color="#3b82f6" size={24} fill="rgba(59, 130, 246, 0.2)" /> : <File color="#9ca3af" size={24} />}
                 </View>
@@ -388,6 +364,52 @@ export default function FilesScreen({ navigation }) {
         </ScrollView>
       )}
 
+      {/* ========================================== */}
+      {/* 🚀 终极黑科技：全屏沉浸式预览控件 */}
+      {/* ========================================== */}
+      <Modal visible={!!previewItem} transparent={true} animationType="fade" onRequestClose={() => setPreviewItem(null)}>
+        <View style={styles.previewContainer}>
+          {/* 顶栏控制条 */}
+          <View style={styles.previewHeader}>
+            <TouchableOpacity onPress={() => setPreviewItem(null)} style={styles.previewCloseBtn}>
+              <X color="#ffffff" size={24} />
+            </TouchableOpacity>
+            <Text style={styles.previewTitle} numberOfLines={1}>{previewItem?.name}</Text>
+            {/* 顶栏下载按钮 */}
+            <TouchableOpacity onPress={() => handleDownload(previewItem)} style={styles.previewDownloadBtn}>
+              <DownloadCloud color="#3b82f6" size={24} />
+            </TouchableOpacity>
+          </View>
+
+          {/* 预览核心区域 */}
+          <View style={styles.previewContent}>
+            {previewItem && isImageFile(previewItem.name) ? (
+              // 💡 如果是图片，直接携带 Auth Header 从网盘加载流媒体渲染！
+              <Image 
+                source={{ 
+                  uri: getDirectUrl(previewItem.href),
+                  headers: { 'Authorization': `Basic ${base64.encode(`${username}:${password}`)}` }
+                }} 
+                style={styles.previewImage} 
+                resizeMode="contain" 
+              />
+            ) : (
+              // 💡 如果是视频或其他文件，显示优雅的信息面板
+              <View style={styles.previewFallback}>
+                <File color="#4b5563" size={80} style={{ marginBottom: 20 }} />
+                <Text style={styles.previewFallbackName}>{previewItem?.name}</Text>
+                <Text style={styles.previewFallbackSize}>{formatBytes(previewItem?.size)}</Text>
+                
+                <TouchableOpacity style={styles.previewBigDownloadBtn} onPress={() => handleDownload(previewItem)}>
+                  <Download color="#ffffff" size={20} />
+                  <Text style={styles.previewBigDownloadText}>下载到手机查看</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {/* --- 右上角下拉菜单 --- */}
       <Modal visible={isMenuVisible} transparent={true} animationType="fade" onRequestClose={() => setIsMenuVisible(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setIsMenuVisible(false)}>
@@ -396,15 +418,12 @@ export default function FilesScreen({ navigation }) {
               <UploadCloud color="#e5e7eb" size={20} /><Text style={styles.menuText}>上传文件</Text>
             </TouchableOpacity>
             <View style={styles.divider} />
-            <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); Alert.alert('提示', '新建文件夹功能开发中'); }}>
+            <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); Alert.alert('提示', '新建功能开发中'); }}>
               <FolderPlus color="#e5e7eb" size={20} /><Text style={styles.menuText}>新建文件夹</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); Alert.alert('提示', '新建文件功能开发中'); }}>
-              <FilePlus color="#e5e7eb" size={20} /><Text style={styles.menuText}>新建文件</Text>
             </TouchableOpacity>
             <View style={styles.divider} />
             <TouchableOpacity style={styles.menuItem} onPress={disconnect}>
-              <LogOut color="#ef4444" size={20} /><Text style={[styles.menuText, { color: '#ef4444' }]}>断开 WebDAV 连接</Text>
+              <LogOut color="#ef4444" size={20} /><Text style={[styles.menuText, { color: '#ef4444' }]}>断开 WebDAV</Text>
             </TouchableOpacity>
           </View>
         </Pressable>
@@ -417,24 +436,16 @@ export default function FilesScreen({ navigation }) {
             <Text style={styles.transferTitle}>传输任务</Text>
             <TouchableOpacity onPress={() => setIsTransferVisible(false)}><Text style={styles.closeText}>关闭</Text></TouchableOpacity>
           </View>
-          
           <ScrollView contentContainerStyle={styles.transferContent}>
             {transfers.length === 0 ? (
-              <View style={[styles.listCenter, { marginTop: 100 }]}>
-                <ArrowDownUp color="#374151" size={48} style={{ marginBottom: 16 }} />
-                <Text style={styles.emptyText}>当前没有正在进行的传输任务</Text>
-              </View>
+              <View style={[styles.listCenter, { marginTop: 100 }]}><ArrowDownUp color="#374151" size={48} style={{ marginBottom: 16 }} /><Text style={styles.emptyText}>没有传输任务</Text></View>
             ) : (
               transfers.map((item) => (
                 <View key={item.id} style={styles.transferRow}>
-                  <View style={styles.transferIconBox}>
-                    {item.type === '上传' ? <UploadCloud color="#f59e0b" size={20} /> : <DownloadCloud color="#10b981" size={20} />}
-                  </View>
+                  <View style={styles.transferIconBox}>{item.type === '上传' ? <UploadCloud color="#f59e0b" size={20} /> : <DownloadCloud color="#10b981" size={20} />}</View>
                   <View style={styles.transferInfo}>
                     <Text style={styles.transferName} numberOfLines={1}>{item.name}</Text>
-                    <Text style={[styles.transferStatus, 
-                      { color: item.status.includes('成功') ? '#10b981' : item.status.includes('失败') ? '#ef4444' : '#3b82f6' }
-                    ]}>{item.type} - {item.status}</Text>
+                    <Text style={[styles.transferStatus, { color: item.status.includes('成功') ? '#10b981' : item.status.includes('失败') ? '#ef4444' : '#3b82f6' }]}>{item.type} - {item.status}</Text>
                   </View>
                 </View>
               ))
@@ -471,6 +482,23 @@ const styles = StyleSheet.create({
   fileInfo: { flex: 1, justifyContent: 'center' },
   fileName: { color: '#e5e7eb', fontSize: 15, fontWeight: '500' },
   fileSize: { color: '#9ca3af', fontSize: 12, marginTop: 4 },
+
+  // ==========================================
+  // 🚀 预览控件专属样式
+  // ==========================================
+  previewContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)' }, // 极致沉浸黑
+  previewHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: Platform.OS === 'ios' ? 60 : 20, paddingHorizontal: 16, paddingBottom: 16, backgroundColor: 'rgba(0,0,0,0.5)' },
+  previewCloseBtn: { padding: 8 },
+  previewDownloadBtn: { padding: 8 },
+  previewTitle: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', flex: 1, textAlign: 'center', paddingHorizontal: 10 },
+  previewContent: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  previewImage: { width: '100%', height: '100%' },
+  
+  previewFallback: { alignItems: 'center', padding: 40, width: '100%' },
+  previewFallbackName: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
+  previewFallbackSize: { color: '#9ca3af', fontSize: 14, marginBottom: 40 },
+  previewBigDownloadBtn: { flexDirection: 'row', backgroundColor: '#3b82f6', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 30, alignItems: 'center' },
+  previewBigDownloadText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
   dropdownMenu: { position: 'absolute', top: Platform.OS === 'ios' ? 100 : 60, right: 16, backgroundColor: '#1f2937', borderRadius: 12, padding: 8, width: 200, elevation: 5 },
