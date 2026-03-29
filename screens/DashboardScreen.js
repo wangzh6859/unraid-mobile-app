@@ -135,7 +135,7 @@ export default function DashboardScreen({ navigation }) {
       </View>
 
       {/* 阵列存储 */}
-      <TouchableOpacity style={styles.card}>
+      <TouchableOpacity style={styles.card} onPress={() => navigation.navigate('存储详情')}>
         <View style={styles.cardHeader}><HardDrive color="#10b981" size={24} /><Text style={styles.cardTitle}>阵列存储</Text></View>
         <Text style={styles.mainNumber}>{storage.percentage}%</Text>
         <Text style={styles.subText}>已用 {formatBytes(storage.total_used)} / 总共 {formatBytes(storage.total_size)}</Text>

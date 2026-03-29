@@ -9,6 +9,7 @@ import DashboardScreen from './screens/DashboardScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import DockerDetailsScreen from './screens/DockerDetailsScreen';
 import VmDetailsScreen from './screens/VmDetailsScreen';
+import StorageDetailsScreen from './screens/StorageDetailsScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -30,6 +31,7 @@ function HomeStack() {
       {/* 以下是二级页面，会自动带有返回按钮 */}
       <Stack.Screen name="Docker详情" component={DockerDetailsScreen} options={{ title: 'Docker 管理' }} />
       <Stack.Screen name="VM详情" component={VmDetailsScreen} options={{ title: '虚拟机 管理' }} />
+      <Stack.Screen name="存储详情" component={StorageDetailsScreen} options={{ title: '磁盘存储详情' }} />
     </Stack.Navigator>
   );
 }
