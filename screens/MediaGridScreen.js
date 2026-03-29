@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, FlatList, Image, Alert, Dimensions, TextInput, KeyboardAvoidingView, Platform, Modal, Pressable, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { XMLParser } from 'fast-xml-parser';
 import base64 from 'base-64';
-import { PlayCircle, RefreshCw, Film, Server, User, Key, Plus, FolderHeart, LogOut, Folder, ChevronRight, CheckCircle2, X } from 'lucide-react-native';
+import { PlayCircle, RefreshCw, Film, Server, User, Key, Plus, FolderHeart, LogOut, Folder, ChevronRight, CheckCircle2, X, Trash2, Clock, FolderPlus } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
 const POSTER_WIDTH = (width - 48) / 3; 
@@ -14,385 +14,242 @@ export default function MediaGridScreen({ navigation }) {
   const [davUrl, setDavUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [isTesting, setIsTesting] = useState(false);
-
+  
   const [libraries, setLibraries] = useState([]); 
   const [movieList, setMovieList] = useState([]);
+  const [continueWatching, setContinueWatching] = useState([]); // 继续观看列表
   const [activeTab, setActiveTab] = useState('all'); 
   
+  const [isScanning, setIsScanning] = useState(false); // 💡 后台扫描状态
+  const [scanProgress, setScanProgress] = useState(''); // 💡 临时进度显示
   const [loading, setLoading] = useState(true);
-  const [scanningInfo, setScanningInfo] = useState('');
 
+  // 弹窗状态
   const [showAddLibModal, setShowAddLibModal] = useState(false);
+  const [browserMode, setBrowserMode] = useState('create'); // 'create' | 'add_path'
+  const [targetLibId, setTargetLibId] = useState(null);
+  
   const [browserPath, setBrowserPath] = useState('/'); 
   const [browserFolders, setBrowserFolders] = useState([]); 
   const [browserLoading, setBrowserLoading] = useState(false);
-  
   const [newLibName, setNewLibName] = useState('');
   const [newLibType, setNewLibType] = useState('movie'); 
 
-  useEffect(() => { loadConfigAndCache(); }, []);
+  useEffect(() => { loadInitialData(); }, []);
 
-  const loadConfigAndCache = async () => {
+  const loadInitialData = async () => {
     try {
       const savedUrl = await AsyncStorage.getItem('@media_dav_url');
       const savedUser = await AsyncStorage.getItem('@media_dav_user');
       const savedPass = await AsyncStorage.getItem('@media_dav_pass');
       const savedLibs = await AsyncStorage.getItem('@media_libraries');
       const savedCache = await AsyncStorage.getItem('@media_movie_cache');
+      const savedProgress = await AsyncStorage.getItem('@media_playback_progress');
       
       if (savedUrl && savedUser && savedPass) {
         setDavUrl(savedUrl); setUsername(savedUser); setPassword(savedPass);
         setIsConfigured(true);
-
-        const parsedLibs = savedLibs ? JSON.parse(savedLibs) : [];
-        setLibraries(parsedLibs);
-
-        if (savedCache) {
-          setMovieList(JSON.parse(savedCache));
-          setLoading(false);
-        } else if (parsedLibs.length > 0) {
-          scanAllLibraries(savedUrl, savedUser, savedPass, parsedLibs);
-        } else { setLoading(false); }
-      } else { setLoading(false); }
-    } catch (e) { console.error(e); setLoading(false); }
-  };
-
-  const webdavFetch = async (fullUrl, method = 'PROPFIND', isText = false, authHeader) => {
-    const response = await fetch(fullUrl, { method: method, headers: { 'Authorization': authHeader, 'Depth': '1', 'Content-Type': 'application/xml' } });
-    return isText ? await response.text() : response;
-  };
-
-  const handleConnect = async () => {
-    if (!davUrl || !username || !password) { Alert.alert('提示', '请完整填写信息'); return; }
-    let cleanUrl = davUrl.trim();
-    if (!cleanUrl.endsWith('/')) cleanUrl += '/'; 
-
-    setIsTesting(true);
-    try {
-      const credentials = base64.encode(`${username}:${password}`);
-      const headers = { 'Authorization': `Basic ${credentials}`, 'Depth': '1', 'Content-Type': 'application/xml' };
-      
-      let response = await fetch(cleanUrl, { method: 'PROPFIND', headers });
-      if (response.status === 405 && !cleanUrl.endsWith('/dav/')) {
-        const alistUrl = cleanUrl + 'dav/';
-        let retryResponse = await fetch(alistUrl, { method: 'PROPFIND', headers });
-        if (retryResponse.status === 200 || retryResponse.status === 207) { response = retryResponse; cleanUrl = alistUrl; }
+        setLibraries(savedLibs ? JSON.parse(savedLibs) : []);
+        setMovieList(savedCache ? JSON.parse(savedCache) : []);
+        setContinueWatching(savedProgress ? JSON.parse(savedProgress) : []);
       }
-
-      if (response.status === 200 || response.status === 207) {
-        await AsyncStorage.setItem('@media_dav_url', cleanUrl);
-        await AsyncStorage.setItem('@media_dav_user', username);
-        await AsyncStorage.setItem('@media_dav_pass', password);
-        setDavUrl(cleanUrl); setIsConfigured(true);
-        Alert.alert('连接成功', '请点击右上角 + 号，通过浏览器选择文件夹来添加媒体库。');
-      } else { Alert.alert('连接失败', `状态码：${response.status}`); }
-    } catch (error) { Alert.alert('网络错误', '无法连接到服务器'); } finally { setIsTesting(false); }
+    } catch (e) { console.error(e); } finally { setLoading(false); }
   };
 
-  const handleLogout = () => {
-    Alert.alert('切换账号', '确定要断开当前流媒体库并重新配置吗？这会清除本地缓存。', [
-      { text: '取消', style: 'cancel' },
-      { text: '确定注销', style: 'destructive', onPress: async () => {
-          await AsyncStorage.removeItem('@media_dav_url');
-          await AsyncStorage.removeItem('@media_dav_pass');
-          await AsyncStorage.removeItem('@media_movie_cache');
-          await AsyncStorage.removeItem('@media_libraries');
-          setLibraries([]); setMovieList([]); setIsConfigured(false);
-      }}
-    ]);
-  };
-
-  const openBrowserModal = () => {
-    setNewLibName(''); setNewLibType('movie');
-    const rootPathMatch = davUrl.match(/^(https?:\/\/[^\/]+)(.*)$/);
-    const startPath = rootPathMatch && rootPathMatch[2] ? rootPathMatch[2] : '/';
-    setBrowserPath(startPath);
-    fetchBrowserFolders(startPath);
-    setShowAddLibModal(true);
-  };
-
+  // ==========================================
+  // 📁 增强版文件夹浏览器 (支持多目录绑定)
+  // ==========================================
   const fetchBrowserFolders = async (targetPath) => {
     setBrowserLoading(true);
     try {
       const originMatch = davUrl.match(/^(https?:\/\/[^\/]+)/);
-      const origin = originMatch ? originMatch[1] : '';
       const auth = `Basic ${base64.encode(`${username}:${password}`)}`;
-      
-      const xmlText = await webdavFetch(origin + targetPath, 'PROPFIND', true, auth);
+      const response = await fetch(originMatch[1] + targetPath, { method: 'PROPFIND', headers: { 'Authorization': auth, 'Depth': '1' } });
+      const xmlText = await response.text();
       const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true });
       const result = parser.parse(xmlText);
       let responses = result?.multistatus?.response || [];
       if (!Array.isArray(responses)) responses = [responses];
-
-      let folders = [];
-      responses.forEach(res => {
+      let folders = responses.filter(res => {
         let href = res.href.replace(/https?:\/\/[^\/]+/, '');
-        const isFolder = res.propstat?.prop?.resourcetype?.collection === '';
-        if (isFolder && href !== targetPath && href !== targetPath + '/') {
-          folders.push({ name: decodeURIComponent(href.split('/').filter(Boolean).pop()), path: href });
-        }
-      });
+        return res.propstat?.prop?.resourcetype?.collection === '' && href !== targetPath && href !== targetPath + '/';
+      }).map(res => ({ name: decodeURIComponent(res.href.replace(/https?:\/\/[^\/]+/, '').split('/').filter(Boolean).pop()), path: res.href.replace(/https?:\/\/[^\/]+/, '') }));
       setBrowserFolders(folders.sort((a, b) => a.name.localeCompare(b.name)));
-    } catch (error) { Alert.alert('读取目录失败', '请检查网络'); } finally { setBrowserLoading(false); }
-  };
-
-  const goUpFolder = () => {
-    const rootPathMatch = davUrl.match(/^(https?:\/\/[^\/]+)(.*)$/);
-    const rootPath = rootPathMatch && rootPathMatch[2] ? rootPathMatch[2] : '/';
-    if (browserPath === rootPath || browserPath === rootPath + '/') return;
-    let p = browserPath.endsWith('/') ? browserPath.slice(0, -1) : browserPath;
-    const parentPath = p.substring(0, p.lastIndexOf('/') + 1);
-    setBrowserPath(parentPath);
-    fetchBrowserFolders(parentPath);
+    } catch (error) { console.error(error); } finally { setBrowserLoading(false); }
   };
 
   const handleSaveLibrary = async () => {
-    if (!newLibName.trim()) { Alert.alert('提示', '请给媒体库起个名字'); return; }
-    
-    const newLib = { id: Date.now().toString(), name: newLibName.trim(), type: newLibType, path: browserPath };
-    const updatedLibs = [...libraries, newLib];
+    let updatedLibs = [...libraries];
+    if (browserMode === 'create') {
+      if (!newLibName.trim()) return Alert.alert('提示', '请输入名称');
+      updatedLibs.push({ id: Date.now().toString(), name: newLibName.trim(), type: newLibType, paths: [browserPath] });
+    } else {
+      updatedLibs = updatedLibs.map(lib => lib.id === targetLibId ? { ...lib, paths: [...new Set([...lib.paths, browserPath])] } : lib);
+    }
     setLibraries(updatedLibs);
     await AsyncStorage.setItem('@media_libraries', JSON.stringify(updatedLibs));
     setShowAddLibModal(false);
-    
-    scanAllLibraries(davUrl, username, password, updatedLibs);
+    startBackgroundScan(updatedLibs); // 💡 触发后台扫描
+  };
+
+  const deleteLibrary = (id) => {
+    Alert.alert('删除媒体库', '确定要删除此分类吗？视频文件不会被删除。', [
+      { text: '取消' },
+      { text: '确定', style: 'destructive', onPress: async () => {
+        const updated = libraries.filter(l => l.id !== id);
+        setLibraries(updated);
+        await AsyncStorage.setItem('@media_libraries', JSON.stringify(updated));
+        setMovieList(prev => prev.filter(m => m.libraryId !== id));
+      }}
+    ]);
   };
 
   // ==========================================
-  // 🎬 全新黑科技：BFS 深层嵌套刮削引擎
+  // 🎬 后台异步扫描引擎 (带进度提示)
   // ==========================================
-  const parseNfo = (xmlData) => {
-    try {
-      const parser = new XMLParser({ ignoreAttributes: true });
-      const result = parser.parse(xmlData);
-      const meta = result.movie || result.video || result.tvshow || result.episodedetails || {};
-      return { title: meta.title || meta.originaltitle || '未知标题', plot: meta.plot || '暂无简介', year: meta.year || '', rating: meta.rating || meta.userrating || '0.0' };
-    } catch (e) { return { title: '解析失败', plot: '', year: '', rating: '' }; }
-  };
-
-  const scanAllLibraries = async (url, user, pass, libs) => {
-    if (libs.length === 0) return;
-    setLoading(true);
+  const startBackgroundScan = async (libsToScan) => {
+    if (isScanning) return;
+    setIsScanning(true);
     let allMovies = [];
-    const auth = `Basic ${base64.encode(`${user}:${pass}`)}`;
-    const originMatch = url.match(/^(https?:\/\/[^\/]+)/);
-    const origin = originMatch ? originMatch[1] : '';
+    const auth = `Basic ${base64.encode(`${username}:${password}`)}`;
+    const origin = davUrl.match(/^(https?:\/\/[^\/]+)/)[1];
 
     try {
-      for (const lib of libs) {
-        let startPath = lib.path;
-        if (!startPath.endsWith('/')) startPath += '/';
-        
-        // 💡 采用队列 (Queue) 实现广度优先搜索，无限下钻！
-        let queue = [startPath];
+      for (const lib of libsToScan) {
+        for (const path of lib.paths) {
+          let queue = [path.endsWith('/') ? path : path + '/'];
+          while (queue.length > 0) {
+            const currentPath = queue.shift();
+            setScanProgress(`${lib.name}: ${decodeURIComponent(currentPath).split('/').pop() || '...'}`);
+            
+            try {
+              const res = await fetch(origin + currentPath, { method: 'PROPFIND', headers: { 'Authorization': auth, 'Depth': '1' } });
+              const xml = await res.text();
+              const result = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true }).parse(xml);
+              let items = result?.multistatus?.response || [];
+              if (!Array.isArray(items)) items = [items];
 
-        while (queue.length > 0) {
-          const currentPath = queue.shift();
-          const folderName = decodeURIComponent(currentPath.split('/').filter(Boolean).pop() || '根目录');
-          
-          setScanningInfo(`[${lib.name}]\n正在嗅探: ${folderName}`);
-
-          try {
-            const xmlText = await webdavFetch(origin + currentPath, 'PROPFIND', true, auth);
-            const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true });
-            const result = parser.parse(xmlText);
-            let responses = result?.multistatus?.response || [];
-            if (!Array.isArray(responses)) responses = [responses];
-
-            let subFolders = [];
-            let files = [];
-
-            // 分类当前目录下的 文件夹 和 文件
-            responses.forEach(res => {
-              let href = res.href.replace(/https?:\/\/[^\/]+/, '');
-              if (href === currentPath || href === currentPath + '/') return; // 跳过自己
-
-              const isFolder = res.propstat?.prop?.resourcetype?.collection === '';
-              if (isFolder) {
-                subFolders.push(href);
-              } else {
-                files.push(href);
+              let vids = items.filter(i => /\.(mkv|mp4|avi|iso)$/i.test(i.href));
+              if (vids.length > 0) {
+                let movie = { id: `${lib.id}-${allMovies.length}`, libraryId: lib.id, title: decodeURIComponent(currentPath.split('/').filter(Boolean).pop()), videoUrl: origin + vids[0].href, posterUrl: null, nfo: null };
+                // 探测 NFO 和 海报 (简化逻辑提高扫描速度)
+                items.forEach(i => {
+                    const h = i.href.toLowerCase();
+                    if (h.endsWith('.nfo')) movie.nfo_path = origin + i.href;
+                    if (h.includes('poster') || h.includes('folder')) movie.posterUrl = origin + i.href;
+                });
+                allMovies.push(movie);
               }
-            });
-
-            // 💡 检查当前目录是否包含视频文件！
-            const videoFiles = files.filter(f => /\.(mkv|mp4|avi|mov|m4v|iso|rmvb|flv|ts)$/i.test(f));
-
-            if (videoFiles.length > 0) {
-              // 说明这是一个装着视频的有效媒体目录！
-              let movieData = { 
-                id: `${lib.id}-${allMovies.length}`, 
-                libraryId: lib.id, 
-                type: lib.type, 
-                title: folderName, // 默认用文件夹名字
-                posterUrl: null, 
-                videoUrl: origin + videoFiles[0], // 暂时取第一个视频作为播放源
-                nfo: null 
-              };
-
-              // 在同级目录下寻找刮削元数据 (NFO 和 海报)
-              for (const fileHref of files) {
-                const lowerName = fileHref.toLowerCase();
-                const directUrl = origin + fileHref;
-
-                if (lowerName.endsWith('.nfo') && !movieData.nfo) {
-                  const nfoContent = await webdavFetch(directUrl, 'GET', true, auth);
-                  movieData.nfo = parseNfo(nfoContent);
-                  if (movieData.nfo.title && movieData.nfo.title !== '未知标题') {
-                    movieData.title = movieData.nfo.title; 
-                  }
-                }
-                
-                // 兼容海报命名：poster.jpg, folder.jpg, cover.jpg
-                if ((lowerName.includes('poster.') || lowerName.includes('folder.') || lowerName.includes('cover.')) && /\.(jpg|jpeg|png|webp)$/i.test(lowerName) && !movieData.posterUrl) {
-                  movieData.posterUrl = directUrl;
-                }
-              }
-
-              allMovies.push(movieData);
-            }
-
-            // 💡 无论有没有找到视频，都把子文件夹加入队列，继续深入挖掘！
-            queue.push(...subFolders);
-
-          } catch (err) {
-            console.log(`读取目录失败跳过: ${currentPath}`, err);
+              items.forEach(i => {
+                  if (i.propstat?.prop?.resourcetype?.collection === '' && i.href.replace(/https?:\/\/[^\/]+/, '') !== currentPath) 
+                    queue.push(i.href.replace(/https?:\/\/[^\/]+/, '').endsWith('/') ? i.href.replace(/https?:\/\/[^\/]+/, '') : i.href.replace(/https?:\/\/[^\/]+/, '') + '/');
+              });
+            } catch (e) {}
           }
         }
       }
-      
       setMovieList(allMovies);
       await AsyncStorage.setItem('@media_movie_cache', JSON.stringify(allMovies));
-    } catch (error) { 
-      Alert.alert('扫描失败', '扫描被中断，请检查网络环境。'); 
-    } finally { 
-      setLoading(false); 
+    } finally {
+      setIsScanning(false);
+      setScanProgress('');
     }
   };
 
-  const filteredMovies = movieList.filter(m => activeTab === 'all' || m.libraryId === activeTab);
-
   const renderMovieItem = ({ item }) => (
-    <TouchableOpacity style={styles.posterCard} onPress={() => Alert.alert('详情页就绪', `名称：${item.title}\n年份：${item.nfo?.year || '未知'}\n\n简介：${item.nfo?.plot?.substring(0, 50)}...`)}>
+    <TouchableOpacity style={styles.posterCard} onPress={() => navigation.navigate('Player', { movie: item })}>
       <View style={styles.posterShadow}>
-        {item.posterUrl ? (
-          <Image source={{ uri: item.posterUrl, headers: { 'Authorization': `Basic ${base64.encode(`${username}:${password}`)}` } }} style={styles.posterImage} />
-        ) : (
-          <View style={[styles.posterImage, styles.posterFallback]}><Film color="#4b5563" size={40} /><Text style={styles.fallbackText}>{item.title}</Text></View>
-        )}
-        {item.nfo?.rating && item.nfo?.rating !== '0.0' && <View style={styles.ratingBadge}><Text style={styles.ratingText}>{item.nfo.rating}</Text></View>}
+        <Image source={{ uri: item.posterUrl, headers: { 'Authorization': `Basic ${base64.encode(`${username}:${password}`)}` } }} style={styles.posterImage} />
       </View>
       <Text style={styles.movieTitle} numberOfLines={1}>{item.title}</Text>
-      <Text style={styles.movieYear}>{item.nfo?.year}</Text>
     </TouchableOpacity>
   );
-
-  if (!loading && !isConfigured) {
-    return (
-      <KeyboardAvoidingView style={styles.center} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-        <View style={styles.setupCard}>
-          <Film color="#3b82f6" size={48} style={{ alignSelf: 'center', marginBottom: 16 }} />
-          <Text style={styles.setupTitle}>私人流媒体库</Text>
-          <Text style={styles.setupSub}>请输入媒体服务器的 WebDAV 地址</Text>
-          <View style={styles.inputContainer}><Server color="#9ca3af" size={20} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="https://alist.bbb.ccc:123" placeholderTextColor="#6b7280" value={davUrl} onChangeText={setDavUrl} autoCapitalize="none" keyboardType="url" /></View>
-          <View style={styles.inputContainer}><User color="#9ca3af" size={20} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="用户名" placeholderTextColor="#6b7280" value={username} onChangeText={setUsername} autoCapitalize="none" /></View>
-          <View style={styles.inputContainer}><Key color="#9ca3af" size={20} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="密码" placeholderTextColor="#6b7280" value={password} onChangeText={setPassword} secureTextEntry={true} /></View>
-          <TouchableOpacity style={styles.saveBtn} onPress={handleConnect} disabled={isTesting}>{isTesting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.saveBtnText}>连接媒体库</Text>}</TouchableOpacity>
-        </View>
-      </KeyboardAvoidingView>
-    );
-  }
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#3b82f6" style={{ marginBottom: 20 }} />
-        <Text style={styles.loadingText}>元数据深度扫描中...</Text>
-        <Text style={styles.loadingSub}>{scanningInfo}</Text>
-      </View>
-    );
-  }
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>我的媒体库</Text>
-        <View style={{ flexDirection: 'row' }}>
-          <TouchableOpacity onPress={openBrowserModal} style={styles.iconBtn}><Plus color="#ffffff" size={24} /></TouchableOpacity>
-          <TouchableOpacity onPress={() => scanAllLibraries(davUrl, username, password, libraries)} style={styles.iconBtn}><RefreshCw color="#ffffff" size={22} /></TouchableOpacity>
+        <View>
+            <Text style={styles.headerTitle}>我的影音</Text>
+            {isScanning && <Text style={styles.scanStatus} numberOfLines={1}>⏳ {scanProgress}</Text>}
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <TouchableOpacity onPress={() => { setBrowserMode('create'); openBrowserModal(); }} style={styles.iconBtn}><Plus color="#ffffff" size={24} /></TouchableOpacity>
+          <TouchableOpacity onPress={() => startBackgroundScan(libraries)} style={styles.iconBtn}>
+            {isScanning ? <ActivityIndicator size="small" color="#3b82f6" /> : <RefreshCw color="#ffffff" size={22} />}
+          </TouchableOpacity>
           <TouchableOpacity onPress={handleLogout} style={styles.iconBtn}><LogOut color="#ef4444" size={22} /></TouchableOpacity>
         </View>
       </View>
 
-      {libraries.length > 0 && (
-        <View style={styles.tabContainer}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabScroll}>
-            <TouchableOpacity onPress={() => setActiveTab('all')} style={[styles.tabBtn, activeTab === 'all' && styles.tabBtnActive]}><Text style={[styles.tabText, activeTab === 'all' && styles.tabTextActive]}>全部</Text></TouchableOpacity>
-            {libraries.map(lib => (
-              <TouchableOpacity key={lib.id} onPress={() => setActiveTab(lib.id)} style={[styles.tabBtn, activeTab === lib.id && styles.tabBtnActive]}><Text style={[styles.tabText, activeTab === lib.id && styles.tabTextActive]}>{lib.name}</Text></TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
+      <ScrollView showsVerticalScrollIndicator={false}>
+        {/* 继续观看模块 */}
+        {continueWatching.length > 0 && (
+            <View style={styles.section}>
+                <View style={styles.sectionHeader}><Clock color="#f59e0b" size={18} /><Text style={styles.sectionTitle}>继续观看</Text></View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingLeft: 16 }}>
+                    {continueWatching.map((item, idx) => (
+                        <TouchableOpacity key={idx} style={styles.continueCard}>
+                            <Image source={{ uri: item.posterUrl }} style={styles.continueImage} />
+                            <View style={styles.progressBar}><View style={[styles.progressInner, { width: `${item.percent}%` }]} /></View>
+                            <Text style={styles.continueText} numberOfLines={1}>{item.title}</Text>
+                        </TouchableOpacity>
+                    ))}
+                </ScrollView>
+            </View>
+        )}
 
-      {libraries.length === 0 ? (
-        <View style={styles.emptyState}>
-          <FolderHeart color="#4b5563" size={64} style={{ marginBottom: 16 }} />
-          <Text style={styles.emptyTitle}>暂无媒体库</Text>
-          <Text style={styles.emptySub}>点击右上角的 + 号，浏览并选择一个包含影视的文件夹来开始刮削。</Text>
+        {/* 媒体库管理及分类 */}
+        <View style={styles.tabContainer}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16 }}>
+                <TouchableOpacity onPress={() => setActiveTab('all')} style={[styles.tabBtn, activeTab === 'all' && styles.tabBtnActive]}><Text style={styles.tabText}>全部</Text></TouchableOpacity>
+                {libraries.map(lib => (
+                    <TouchableOpacity 
+                        key={lib.id} 
+                        onLongPress={() => deleteLibrary(lib.id)}
+                        onPress={() => setActiveTab(lib.id)} 
+                        style={[styles.tabBtn, activeTab === lib.id && styles.tabBtnActive]}
+                    >
+                        <Text style={styles.tabText}>{lib.name}</Text>
+                    </TouchableOpacity>
+                ))}
+            </ScrollView>
         </View>
-      ) : (
+
+        {/* 列表渲染 */}
         <FlatList
-          data={filteredMovies}
+          data={movieList.filter(m => activeTab === 'all' || m.libraryId === activeTab)}
           renderItem={renderMovieItem}
-          keyExtractor={item => item.id.toString()}
+          keyExtractor={item => item.id}
           numColumns={3}
+          scrollEnabled={false}
           contentContainerStyle={styles.listContent}
           columnWrapperStyle={styles.columnWrapper}
-          showsVerticalScrollIndicator={false}
         />
-      )}
+      </ScrollView>
 
-      {/* 📁 可视化浏览器弹窗 */}
-      <Modal visible={showAddLibModal} animationType="slide" onRequestClose={() => setShowAddLibModal(false)}>
+      {/* 📁 改进版文件夹浏览器弹窗 */}
+      <Modal visible={showAddLibModal} animationType="slide">
         <View style={styles.browserModal}>
           <View style={styles.browserHeader}>
-            <Text style={styles.browserTitle}>选择媒体库目录</Text>
-            <TouchableOpacity onPress={() => setShowAddLibModal(false)}><X color="#9ca3af" size={28} /></TouchableOpacity>
+            <Text style={styles.browserTitle}>{browserMode === 'create' ? '新建媒体库' : '添加文件夹'}</Text>
+            <TouchableOpacity onPress={() => setShowAddLibModal(false)}><X color="#ffffff" size={28} /></TouchableOpacity>
           </View>
-          
           <View style={styles.browserPathRow}>
-            <TouchableOpacity onPress={goUpFolder} style={{ padding: 4 }}><ChevronRight color="#3b82f6" size={24} style={{ transform: [{ rotate: '180deg' }] }} /></TouchableOpacity>
+            <TouchableOpacity onPress={goUpFolder}><ChevronRight color="#3b82f6" size={24} style={{ transform: [{ rotate: '180deg' }] }} /></TouchableOpacity>
             <Text style={styles.browserPathText} numberOfLines={1}>{decodeURIComponent(browserPath)}</Text>
           </View>
-
-          <ScrollView style={styles.browserList}>
-            {browserLoading ? (
-              <ActivityIndicator size="large" color="#3b82f6" style={{ marginTop: 50 }} />
-            ) : (
-              browserFolders.map((folder, index) => (
-                <TouchableOpacity key={index} style={styles.browserItem} onPress={() => { setBrowserPath(folder.path); fetchBrowserFolders(folder.path); }}>
-                  <Folder color="#3b82f6" size={24} fill="rgba(59, 130, 246, 0.2)" />
-                  <Text style={styles.browserItemText} numberOfLines={1}>{folder.name}</Text>
-                  <ChevronRight color="#4b5563" size={20} />
+          <ScrollView style={{ flex: 1 }}>
+            {browserLoading ? <ActivityIndicator size="large" color="#3b82f6" style={{ marginTop: 40 }} /> : 
+              browserFolders.map((f, i) => (
+                <TouchableOpacity key={i} style={styles.browserItem} onPress={() => { setBrowserPath(f.path); fetchBrowserFolders(f.path); }}>
+                  <Folder color="#3b82f6" size={22} /><Text style={styles.browserItemText}>{f.name}</Text>
                 </TouchableOpacity>
               ))
-            )}
+            }
           </ScrollView>
-
           <View style={styles.browserFooter}>
-            <Text style={styles.footerLabel}>将当前目录 <Text style={{color:'#3b82f6'}}>{decodeURIComponent(browserPath)}</Text> 添加为：</Text>
-            <TextInput style={styles.modalInput} placeholder="媒体库名称 (如: 我的电影)" placeholderTextColor="#6b7280" value={newLibName} onChangeText={setNewLibName} />
-            <View style={styles.typeSelector}>
-              {['movie', 'tv', 'anime'].map(type => (
-                <TouchableOpacity key={type} style={[styles.typeBtn, newLibType === type && styles.typeBtnActive]} onPress={() => setNewLibType(type)}>
-                  {newLibType === type && <CheckCircle2 color="#ffffff" size={16} style={{ marginRight: 4 }} />}
-                  <Text style={[styles.typeText, newLibType === type && styles.typeTextActive]}>{type === 'movie' ? '电影' : type === 'tv' ? '剧集' : '动漫'}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TouchableOpacity style={styles.modalConfirmBtn} onPress={handleSaveLibrary}><Text style={styles.modalConfirmText}>保存媒体库并扫描</Text></TouchableOpacity>
+             {browserMode === 'create' && <TextInput style={styles.modalInput} placeholder="媒体库名称" placeholderTextColor="#6b7280" value={newLibName} onChangeText={setNewLibName} />}
+             <TouchableOpacity style={styles.modalConfirmBtn} onPress={handleSaveLibrary}><Text style={styles.modalConfirmText}>确认并扫描该路径</Text></TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -401,64 +258,41 @@ export default function MediaGridScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, backgroundColor: '#111827', justifyContent: 'center', alignItems: 'center', padding: 20 },
   container: { flex: 1, backgroundColor: '#111827' },
-  setupCard: { backgroundColor: '#1f2937', borderRadius: 16, padding: 24, elevation: 5, width: '100%' },
-  setupTitle: { color: '#ffffff', fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
-  setupSub: { color: '#9ca3af', fontSize: 13, textAlign: 'center', marginBottom: 24 },
-  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#374151', borderRadius: 8, marginBottom: 16, paddingHorizontal: 12 },
-  inputIcon: { marginRight: 10 },
-  input: { flex: 1, color: '#ffffff', height: 50, fontSize: 16 },
-  saveBtn: { backgroundColor: '#3b82f6', height: 50, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
-  saveBtnText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: 50, backgroundColor: '#1f2937' },
+  headerTitle: { color: '#ffffff', fontSize: 20, fontWeight: 'bold' },
+  scanStatus: { color: '#3b82f6', fontSize: 11, marginTop: 2, width: 150 },
+  iconBtn: { marginLeft: 16 },
+  
+  section: { marginTop: 20 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', marginLeft: 16, marginBottom: 12 },
+  sectionTitle: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', marginLeft: 6 },
+  continueCard: { width: 140, marginRight: 12 },
+  continueImage: { width: 140, height: 80, borderRadius: 8, backgroundColor: '#374151' },
+  progressBar: { height: 3, backgroundColor: '#374151', width: '100%', marginTop: 4 },
+  progressInner: { height: '100%', backgroundColor: '#f59e0b' },
+  continueText: { color: '#e5e7eb', fontSize: 12, marginTop: 4 },
 
-  loadingText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
-  loadingSub: { color: '#9ca3af', fontSize: 13, marginTop: 10, textAlign: 'center', paddingHorizontal: 20 },
+  tabContainer: { marginVertical: 16 },
+  tabBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#1f2937', marginRight: 8, borderWidth: 1, borderColor: '#374151' },
+  tabBtnActive: { backgroundColor: '#3b82f6', borderColor: '#3b82f6' },
+  tabText: { color: '#ffffff', fontSize: 13, fontWeight: 'bold' },
 
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 30, backgroundColor: '#1f2937' },
-  headerTitle: { color: '#ffffff', fontSize: 22, fontWeight: 'bold' },
-  iconBtn: { padding: 8, marginLeft: 8 },
-
-  tabContainer: { backgroundColor: '#1f2937', paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#374151' },
-  tabScroll: { paddingHorizontal: 16, alignItems: 'center' },
-  tabBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#374151', marginRight: 10 },
-  tabBtnActive: { backgroundColor: '#3b82f6' },
-  tabText: { color: '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-  tabTextActive: { color: '#ffffff' },
-
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 30 },
-  emptyTitle: { color: '#e5e7eb', fontSize: 20, fontWeight: 'bold', marginBottom: 12 },
-  emptySub: { color: '#9ca3af', fontSize: 14, textAlign: 'center', lineHeight: 22 },
-
-  listContent: { padding: 12, paddingBottom: 100 },
+  listContent: { paddingHorizontal: 12 },
   columnWrapper: { justifyContent: 'flex-start' },
-  posterCard: { width: POSTER_WIDTH, marginBottom: 20, marginRight: 12 },
-  posterShadow: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.5, shadowRadius: 5, elevation: 8, borderRadius: 8, backgroundColor: '#1f2937' },
-  posterImage: { width: POSTER_WIDTH, height: POSTER_HEIGHT, borderRadius: 8, backgroundColor: '#374151' },
-  posterFallback: { justifyContent: 'center', alignItems: 'center', padding: 8 },
-  fallbackText: { color: '#9ca3af', fontSize: 12, textAlign: 'center', marginTop: 8 },
-  movieTitle: { color: '#e5e7eb', fontSize: 14, fontWeight: 'bold', marginTop: 8, marginLeft: 4 },
-  movieYear: { color: '#9ca3af', fontSize: 12, marginLeft: 4 },
-  ratingBadge: { position: 'absolute', top: 6, right: 6, backgroundColor: 'rgba(245, 158, 11, 0.9)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  ratingText: { color: '#ffffff', fontSize: 12, fontWeight: 'bold' },
+  posterCard: { width: POSTER_WIDTH, marginBottom: 16, marginRight: 12 },
+  posterImage: { width: POSTER_WIDTH, height: POSTER_HEIGHT, borderRadius: 8, backgroundColor: '#1f2937' },
+  movieTitle: { color: '#ffffff', fontSize: 12, marginTop: 6 },
 
   browserModal: { flex: 1, backgroundColor: '#111827' },
-  browserHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, backgroundColor: '#1f2937' },
-  browserTitle: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
-  browserPathRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#374151', padding: 12, borderBottomWidth: 1, borderBottomColor: '#1f2937' },
-  browserPathText: { color: '#60a5fa', fontSize: 15, marginLeft: 8, flex: 1 },
-  browserList: { flex: 1 },
+  browserHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: 50, backgroundColor: '#1f2937' },
+  browserTitle: { color: '#ffffff', fontSize: 18 },
+  browserPathRow: { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: '#1f2937' },
+  browserPathText: { color: '#3b82f6', marginLeft: 8, fontSize: 14 },
   browserItem: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#1f2937' },
-  browserItemText: { color: '#e5e7eb', fontSize: 16, flex: 1, marginLeft: 16 },
-  
-  browserFooter: { backgroundColor: '#1f2937', padding: 20, paddingBottom: Platform.OS === 'ios' ? 40 : 20, borderTopWidth: 1, borderTopColor: '#374151' },
-  footerLabel: { color: '#9ca3af', fontSize: 14, marginBottom: 12 },
-  modalInput: { backgroundColor: '#374151', color: '#ffffff', borderRadius: 8, height: 50, paddingHorizontal: 16, fontSize: 16, marginBottom: 16 },
-  typeSelector: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
-  typeBtn: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 10, backgroundColor: '#374151', borderRadius: 8, marginHorizontal: 4 },
-  typeBtnActive: { backgroundColor: '#8b5cf6' },
-  typeText: { color: '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-  typeTextActive: { color: '#ffffff' },
-  modalConfirmBtn: { backgroundColor: '#3b82f6', paddingVertical: 14, borderRadius: 8, alignItems: 'center' },
-  modalConfirmText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
+  browserItemText: { color: '#ffffff', marginLeft: 12 },
+  browserFooter: { padding: 20, backgroundColor: '#1f2937' },
+  modalInput: { backgroundColor: '#374151', color: '#ffffff', padding: 12, borderRadius: 8, marginBottom: 12 },
+  modalConfirmBtn: { backgroundColor: '#3b82f6', padding: 14, borderRadius: 8, alignItems: 'center' },
+  modalConfirmText: { color: '#ffffff', fontWeight: 'bold' }
 });
