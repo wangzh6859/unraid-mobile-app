@@ -68,14 +68,7 @@ export default function App() {
         <Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
         <Tab.Screen name="文件" component={FilesScreen} />
         <Tab.Screen name="影音" component={MediaScreen} />
-        <Tab.Screen 
-          name="影音" 
-          component={MediaScreen} 
-          options={{ 
-            headerShown: false, 
-            tabBarStyle: { display: 'none' } 
-          }} 
-        />
+        <Tab.Screen name="影音" component={MediaScreen} options={{ headerShown: false }} />
         <Tab.Screen name="设置" component={SettingsScreen} />
       </Tab.Navigator>
     </NavigationContainer>

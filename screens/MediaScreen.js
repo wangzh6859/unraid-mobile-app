@@ -4,12 +4,12 @@ import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Film, Save, RefreshCw, Home } from 'lucide-react-native';
 
-// 注意：这里引入了 navigation，用于悬浮球的返回功能
 export default function MediaScreen({ navigation }) {
   const [mediaUrl, setMediaUrl] = useState(null);
   const [inputUrl, setInputUrl] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
+  // 智能推算 Emby 地址
   const guessEmbyUrl = (unraidUrl) => {
     if (!unraidUrl) return '';
     const isIp = /^https?:\/\/\d{1,3}(\.\d{1,3}){3}/.test(unraidUrl);
@@ -62,7 +62,7 @@ export default function MediaScreen({ navigation }) {
 
   if (isLoading) return <View style={styles.center}><ActivityIndicator size="large" color="#f59e0b" /></View>;
 
-  // --- 引导配置页保持不变 ---
+  // --- 引导配置页 ---
   if (!mediaUrl) {
     return (
       <KeyboardAvoidingView style={styles.center} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -86,8 +86,6 @@ export default function MediaScreen({ navigation }) {
             <Text style={styles.saveBtnText}>进入全屏影院</Text>
           </TouchableOpacity>
         </View>
-        
-        {/* 配置页也需要一个返回按钮，因为底部 Tab 没了 */}
         <TouchableOpacity style={styles.cancelBtn} onPress={() => navigation.navigate('首页')}>
           <Text style={styles.cancelBtnText}>暂不配置，返回首页</Text>
         </TouchableOpacity>
@@ -95,10 +93,10 @@ export default function MediaScreen({ navigation }) {
     );
   }
 
-  // --- 全屏无边框 WebView 模式 ---
+  // --- WebView 渲染页 ---
   return (
     <View style={styles.webViewContainer}>
-      {/* 核心：网页无缝内嵌，为了沉浸感去掉所有 Padding */}
+      {/* 沉浸式网页内嵌 */}
       <WebView 
         source={{ uri: mediaUrl }} 
         style={styles.webView}
@@ -107,14 +105,8 @@ export default function MediaScreen({ navigation }) {
         renderLoading={() => <View style={styles.webViewLoader}><ActivityIndicator size="large" color="#f59e0b" /></View>}
       />
 
-      {/* 绝对定位的磨砂半透明悬浮球 (FAB) */}
+      {/* 悬浮球 (由于恢复了底部导航栏，我们可以把返回首页的球去掉了，只保留重新配置) */}
       <View style={styles.fabContainer}>
-        {/* 返回首页悬浮球 */}
-        <TouchableOpacity style={styles.fab} onPress={() => navigation.navigate('首页')}>
-          <Home color="#ffffff" size={20} />
-        </TouchableOpacity>
-        
-        {/* 重新配置悬浮球 */}
         <TouchableOpacity style={styles.fab} onPress={handleResetUrl}>
           <RefreshCw color="#ffffff" size={18} />
         </TouchableOpacity>
@@ -135,32 +127,25 @@ const styles = StyleSheet.create({
   cancelBtn: { marginTop: 20, alignSelf: 'center', padding: 10 },
   cancelBtnText: { color: '#9ca3af', fontSize: 14 },
   
-  // WebView 全屏样式
   webViewContainer: { flex: 1, backgroundColor: '#000000' },
-  webView: { flex: 1, backgroundColor: '#000000', marginTop: Platform.OS === 'ios' ? 40 : 20 }, // 给系统状态栏留一点安全距离
+  webView: { flex: 1, backgroundColor: '#000000', marginTop: Platform.OS === 'ios' ? 40 : 25 }, 
   webViewLoader: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000000' },
 
-  // 悬浮球群组样式
   fabContainer: {
     position: 'absolute',
     right: 16,
-    bottom: 120, // 距离底部 120px，完美避开 Emby 的原生底栏
+    bottom: 80, // 高度调整：完美避开 Emby 的菜单和我们自己的底部栏
     alignItems: 'center',
   },
   fab: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: 'rgba(31, 41, 55, 0.7)', // 极客风的半透明磨砂黑
+    backgroundColor: 'rgba(31, 41, 55, 0.7)', 
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
     elevation: 5,
   }
 });
