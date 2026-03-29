@@ -26,7 +26,7 @@ export default function DashboardScreen({ navigation }) {
       setIsConfigured(true);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
       const response = await fetch(`${savedUrl}/api.php?token=${savedToken}&action=status`, { signal: controller.signal });
       clearTimeout(timeoutId);
 
