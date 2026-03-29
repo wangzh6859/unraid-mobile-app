@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, ScrollView } from 'react-native';
+import React, { useState, useEffect, useCallback, useLayoutEffect } from 'react';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, ScrollView, Modal, BackHandler, Pressable } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Folder, Save, Server, Key, User, File, ChevronLeft, LogOut, HardDrive } from 'lucide-react-native';
+import { Folder, Save, Server, Key, User, File, ChevronLeft, LogOut, HardDrive, Plus, ArrowRightLeft, FolderPlus, FilePlus, UploadCloud } from 'lucide-react-native';
 import base64 from 'base-64';
-import { XMLParser } from 'fast-xml-parser'; // 引入强大的 XML 解析器
+import { XMLParser } from 'fast-xml-parser';
 
-export default function FilesScreen() {
+export default function FilesScreen({ navigation }) {
   const [davUrl, setDavUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -14,12 +14,15 @@ export default function FilesScreen() {
   const [isTesting, setIsTesting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // 文件列表相关的状态
-  const [currentPath, setCurrentPath] = useState(''); // 当前正在浏览的绝对路径 (如 /dav/Movies/)
+  const [currentPath, setCurrentPath] = useState(''); 
   const [fileList, setFileList] = useState([]);
   const [isLoadingList, setIsLoadingList] = useState(false);
 
-  // 1. 初始化读取配置
+  // 弹窗状态
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const [isTransferVisible, setIsTransferVisible] = useState(false);
+
+  // 1. 初始化
   useEffect(() => {
     const loadConfig = async () => {
       try {
@@ -33,20 +36,14 @@ export default function FilesScreen() {
         
         if (savedUrl && savedUser && savedPass) {
           setIsConnected(true);
-          // 提取初始路径
           const urlObj = savedUrl.match(/^(https?:\/\/[^\/]+)(.*)$/);
-          if (urlObj && urlObj[2]) {
-            setCurrentPath(urlObj[2]); 
-          } else {
-            setCurrentPath('/');
-          }
+          setCurrentPath(urlObj && urlObj[2] ? urlObj[2] : '/');
         }
       } catch (e) { console.log(e); } finally { setIsLoading(false); }
     };
     loadConfig();
   }, []);
 
-  // 2. 格式化文件大小
   const formatBytes = (bytes) => {
     if (!bytes || bytes === 0 || bytes === '0') return '-';
     const k = 1024;
@@ -55,7 +52,6 @@ export default function FilesScreen() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  // 3. 核心：发起探测并连接
   const testConnection = async () => {
     if (!davUrl || !username || !password) { Alert.alert('提示', '请完整填写信息'); return; }
     let cleanUrl = davUrl.trim();
@@ -65,10 +61,8 @@ export default function FilesScreen() {
     try {
       const credentials = base64.encode(`${username}:${password}`);
       const headers = { 'Authorization': `Basic ${credentials}`, 'Depth': '1', 'Content-Type': 'application/xml' };
-
       let response = await fetch(cleanUrl, { method: 'PROPFIND', headers });
 
-      // AList 智能探测引擎
       if (response.status === 405 && !cleanUrl.endsWith('/dav/')) {
         const alistUrl = cleanUrl + 'dav/';
         let retryResponse = await fetch(alistUrl, { method: 'PROPFIND', headers });
@@ -79,13 +73,11 @@ export default function FilesScreen() {
       }
 
       if (response.status === 200 || response.status === 207) {
-        await AsyncStorage.setItem('@dav_url', cleanUrl); // 这里存的就是包含 /dav/ 的最终地址
+        await AsyncStorage.setItem('@dav_url', cleanUrl); 
         await AsyncStorage.setItem('@dav_user', username);
         await AsyncStorage.setItem('@dav_pass', password);
-        
         const urlObj = cleanUrl.match(/^(https?:\/\/[^\/]+)(.*)$/);
         setCurrentPath(urlObj && urlObj[2] ? urlObj[2] : '/');
-        
         setIsConnected(true);
       } else {
         Alert.alert('连接失败', `状态码：${response.status}`);
@@ -93,14 +85,12 @@ export default function FilesScreen() {
     } catch (error) { Alert.alert('网络错误', '无法连接'); } finally { setIsTesting(false); }
   };
 
-  // 4. 核心：读取目录文件列表 (手撕 XML)
   const fetchDirectory = useCallback(async (targetPath) => {
     setIsLoadingList(true);
     try {
       const originMatch = davUrl.match(/^(https?:\/\/[^\/]+)/);
       const origin = originMatch ? originMatch[1] : '';
       const fullUrl = origin + targetPath;
-
       const credentials = base64.encode(`${username}:${password}`);
       const response = await fetch(fullUrl, {
         method: 'PROPFIND',
@@ -108,33 +98,26 @@ export default function FilesScreen() {
       });
 
       const xmlText = await response.text();
-
-      // 配置 XML 解析器 (移除恶心的 DAV: 命名空间前缀)
       const parser = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true });
       const result = parser.parse(xmlText);
 
       let responses = result?.multistatus?.response;
-      if (!responses) { setFileList([]); return; }
-      if (!Array.isArray(responses)) responses = [responses]; // 如果只有一个文件，转成数组
+      if (!responses) { setFileList([]); setCurrentPath(targetPath); return; }
+      if (!Array.isArray(responses)) responses = [responses]; 
 
       let parsedFiles = [];
       responses.forEach((res) => {
         let href = res.href;
-        // 兼容处理：有些 WebDAV 返回完整的 url，有些返回绝对路径
         if (href.startsWith('http')) {
           const hMatch = href.match(/^https?:\/\/[^\/]+(.*)$/);
           href = hMatch ? hMatch[1] : href;
         }
-        
-        // 跳过当前目录自身的节点
         if (href === targetPath || href === targetPath + '/') return;
 
-        // 提取属性
         const props = res.propstat?.prop || (Array.isArray(res.propstat) ? res.propstat[0].prop : {});
         const isFolder = props.resourcetype && props.resourcetype.collection === '';
         let displayName = props.displayname;
 
-        // 如果没有 displayname，从 href 截取最后一段
         if (!displayName) {
           const parts = href.split('/').filter(p => p !== '');
           displayName = parts[parts.length - 1];
@@ -146,11 +129,9 @@ export default function FilesScreen() {
           href: href,
           isFolder: isFolder,
           size: props.getcontentlength || 0,
-          lastModified: props.getlastmodified || ''
         });
       });
 
-      // 排序：文件夹排前面，然后按名字字母排序
       parsedFiles.sort((a, b) => {
         if (a.isFolder === b.isFolder) return a.name.localeCompare(b.name);
         return a.isFolder ? -1 : 1;
@@ -166,31 +147,73 @@ export default function FilesScreen() {
     }
   }, [davUrl, username, password]);
 
-  // 当连接状态变为 true，且 currentPath 有值时，自动抓取列表
   useEffect(() => {
-    if (isConnected && currentPath) {
-      fetchDirectory(currentPath);
-    }
+    if (isConnected && currentPath) fetchDirectory(currentPath);
   }, [isConnected]);
 
-  // 返回上一级目录
-  const goBack = () => {
-    const rootPathMatch = davUrl.match(/^(https?:\/\/[^\/]+)(.*)$/);
-    const rootPath = rootPathMatch && rootPathMatch[2] ? rootPathMatch[2] : '/';
+  const rootPathMatch = davUrl.match(/^(https?:\/\/[^\/]+)(.*)$/);
+  const rootPath = rootPathMatch && rootPathMatch[2] ? rootPathMatch[2] : '/';
+  const isAtRoot = currentPath === rootPath || currentPath === rootPath + '/';
 
-    if (currentPath === rootPath || currentPath === rootPath + '/') return; // 已经到顶了
-
-    // 算法：去掉最后的斜杠，然后截取到上一个斜杠
+  const goBack = useCallback(() => {
+    if (isAtRoot) return;
     let p = currentPath.endsWith('/') ? currentPath.slice(0, -1) : currentPath;
     const lastSlash = p.lastIndexOf('/');
     const parentPath = p.substring(0, lastSlash + 1);
     fetchDirectory(parentPath);
-  };
+  }, [currentPath, isAtRoot, fetchDirectory]);
+
+  // 💡 核心：拦截安卓物理返回键
+  useEffect(() => {
+    const onBackPress = () => {
+      if (isConnected && !isAtRoot) {
+        goBack();
+        return true; // 阻断默认返回桌面的行为
+      }
+      return false; // 在根目录时允许返回首页
+    };
+    BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => BackHandler.removeEventListener('hardwareBackPress', onBackPress);
+  }, [isConnected, isAtRoot, goBack]);
 
   const disconnect = async () => {
     await AsyncStorage.removeItem('@dav_pass');
+    setIsMenuVisible(false);
     setIsConnected(false);
   };
+
+  // 💡 核心：利用 React Navigation 挂载原生顶部按钮
+  useLayoutEffect(() => {
+    if (!isConnected) {
+      navigation.setOptions({ title: '连接文件库', headerLeft: null, headerRight: null });
+      return;
+    }
+
+    // 提取当前文件夹名称作为标题
+    const pathParts = currentPath.split('/').filter(Boolean);
+    const titleName = isAtRoot ? '根目录' : decodeURIComponent(pathParts[pathParts.length - 1]);
+
+    navigation.setOptions({
+      title: titleName,
+      headerLeft: () => (
+        <View style={styles.headerBtnGroup}>
+          {!isAtRoot && (
+            <TouchableOpacity onPress={goBack} style={styles.headerBtn}>
+              <ChevronLeft color="#ffffff" size={28} />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={() => setIsTransferVisible(true)} style={[styles.headerBtn, { marginLeft: isAtRoot ? 16 : 0 }]}>
+            <ArrowRightLeft color="#ffffff" size={22} />
+          </TouchableOpacity>
+        </View>
+      ),
+      headerRight: () => (
+        <TouchableOpacity onPress={() => setIsMenuVisible(true)} style={{ marginRight: 16 }}>
+          <Plus color="#ffffff" size={28} />
+        </TouchableOpacity>
+      )
+    });
+  }, [navigation, isConnected, currentPath, isAtRoot, goBack]);
 
   if (isLoading) return <View style={styles.center}><ActivityIndicator size="large" color="#3b82f6" /></View>;
 
@@ -222,32 +245,9 @@ export default function FilesScreen() {
     );
   }
 
-  // 获取根目录路径，用于判断是否显示返回按钮
-  const rootPathMatch = davUrl.match(/^(https?:\/\/[^\/]+)(.*)$/);
-  const rootPath = rootPathMatch && rootPathMatch[2] ? rootPathMatch[2] : '/';
-  const isAtRoot = currentPath === rootPath || currentPath === rootPath + '/';
-
-  // --- 状态B：文件列表大厅 ---
+  // --- 状态B：全屏纯净文件列表 ---
   return (
     <View style={styles.fileContainer}>
-      {/* 顶部路径导航栏 */}
-      <View style={styles.header}>
-        <View style={styles.pathRow}>
-          {!isAtRoot && (
-            <TouchableOpacity onPress={goBack} style={styles.backBtn}>
-              <ChevronLeft color="#ffffff" size={24} />
-            </TouchableOpacity>
-          )}
-          <Text style={styles.pathText} numberOfLines={1}>
-            {decodeURIComponent(currentPath)}
-          </Text>
-        </View>
-        <TouchableOpacity onPress={disconnect} style={styles.logoutBtn}>
-          <LogOut color="#ef4444" size={20} />
-        </TouchableOpacity>
-      </View>
-
-      {/* 文件列表区域 */}
       {isLoadingList ? (
         <View style={styles.listCenter}><ActivityIndicator size="large" color="#3b82f6" /></View>
       ) : (
@@ -263,7 +263,7 @@ export default function FilesScreen() {
                   if (item.isFolder) {
                     fetchDirectory(item.href);
                   } else {
-                    Alert.alert('提示', `这是一个文件：\n${item.name}\n大小：${formatBytes(item.size)}`);
+                    Alert.alert('文件详情', `名称：${item.name}\n大小：${formatBytes(item.size)}`);
                   }
                 }}
               >
@@ -279,6 +279,43 @@ export default function FilesScreen() {
           )}
         </ScrollView>
       )}
+
+      {/* --- 弹窗 1：右上角加号菜单 --- */}
+      <Modal visible={isMenuVisible} transparent={true} animationType="fade" onRequestClose={() => setIsMenuVisible(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setIsMenuVisible(false)}>
+          <View style={styles.dropdownMenu}>
+            <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); Alert.alert('提示', '上传文件功能开发中'); }}>
+              <UploadCloud color="#e5e7eb" size={20} /><Text style={styles.menuText}>上传文件</Text>
+            </TouchableOpacity>
+            <View style={styles.divider} />
+            <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); Alert.alert('提示', '新建文件夹功能开发中'); }}>
+              <FolderPlus color="#e5e7eb" size={20} /><Text style={styles.menuText}>新建文件夹</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); Alert.alert('提示', '新建文件功能开发中'); }}>
+              <FilePlus color="#e5e7eb" size={20} /><Text style={styles.menuText}>新建文件</Text>
+            </TouchableOpacity>
+            <View style={styles.divider} />
+            {/* 为了界面整洁，断开连接移到了这里 */}
+            <TouchableOpacity style={styles.menuItem} onPress={disconnect}>
+              <LogOut color="#ef4444" size={20} /><Text style={[styles.menuText, { color: '#ef4444' }]}>断开 WebDAV 连接</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* --- 弹窗 2：左上角传输任务列表 --- */}
+      <Modal visible={isTransferVisible} animationType="slide" onRequestClose={() => setIsTransferVisible(false)}>
+        <View style={styles.transferModal}>
+          <View style={styles.transferHeader}>
+            <Text style={styles.transferTitle}>传输任务</Text>
+            <TouchableOpacity onPress={() => setIsTransferVisible(false)}><Text style={styles.closeText}>关闭</Text></TouchableOpacity>
+          </View>
+          <View style={styles.listCenter}>
+            <ArrowRightLeft color="#374151" size={48} style={{ marginBottom: 16 }} />
+            <Text style={styles.emptyText}>当前没有正在进行的传输任务</Text>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -294,13 +331,11 @@ const styles = StyleSheet.create({
   saveBtn: { backgroundColor: '#3b82f6', height: 50, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
   saveBtnText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
 
+  // 原生顶栏按钮组
+  headerBtnGroup: { flexDirection: 'row', alignItems: 'center' },
+  headerBtn: { marginRight: 16 },
+
   fileContainer: { flex: 1, backgroundColor: '#111827' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1f2937', paddingTop: Platform.OS === 'ios' ? 50 : 20, paddingBottom: 16, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#374151' },
-  pathRow: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 16 },
-  backBtn: { marginRight: 8, padding: 4 },
-  pathText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', flex: 1 },
-  logoutBtn: { padding: 6, backgroundColor: '#3f1c1c', borderRadius: 8 },
-  
   listCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', minHeight: 300 },
   emptyText: { color: '#6b7280', fontSize: 16 },
   listScroll: { flex: 1 },
@@ -310,4 +345,19 @@ const styles = StyleSheet.create({
   fileInfo: { flex: 1, justifyContent: 'center' },
   fileName: { color: '#e5e7eb', fontSize: 15, fontWeight: '500' },
   fileSize: { color: '#9ca3af', fontSize: 12, marginTop: 4 },
+
+  // 弹出层通用样式
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
+  
+  // 右上角下拉菜单
+  dropdownMenu: { position: 'absolute', top: Platform.OS === 'ios' ? 100 : 60, right: 16, backgroundColor: '#1f2937', borderRadius: 12, padding: 8, width: 200, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', padding: 12 },
+  menuText: { color: '#e5e7eb', fontSize: 16, marginLeft: 12 },
+  divider: { height: 1, backgroundColor: '#374151', marginVertical: 4 },
+
+  // 传输任务页面
+  transferModal: { flex: 1, backgroundColor: '#111827' },
+  transferHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: Platform.OS === 'ios' ? 60 : 20, backgroundColor: '#1f2937', borderBottomWidth: 1, borderBottomColor: '#374151' },
+  transferTitle: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
+  closeText: { color: '#3b82f6', fontSize: 16 },
 });
