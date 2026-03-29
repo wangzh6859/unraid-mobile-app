@@ -7,26 +7,13 @@ import { Home, Folder, Film, Settings } from 'lucide-react-native';
 
 import DashboardScreen from './screens/DashboardScreen';
 import SettingsScreen from './screens/SettingsScreen';
+import DockerDetailsScreen from './screens/DockerDetailsScreen';
+import VmDetailsScreen from './screens/VmDetailsScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-// --- 占位二级页面 (下一步我们会把它们抽离成独立文件并完善控制逻辑) ---
-function DockerDetailsScreen() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.text}>Docker 容器管理列表即将在此渲染！</Text>
-    </View>
-  );
-}
 
-function VmDetailsScreen() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.text}>虚拟机管理列表即将在此渲染！</Text>
-    </View>
-  );
-}
 
 // --- 将首页和它的二级页面打包成一个“堆栈 (Stack)” ---
 function HomeStack() {
