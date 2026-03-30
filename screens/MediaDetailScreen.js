@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, Text, View, ScrollView, Image, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Modal, Share } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
+import * as ScreenOrientation from 'expo-screen-orientation'; // 💡 引入屏幕旋转控制
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { XMLParser } from 'fast-xml-parser';
 import base64 from 'base-64';
-import { ChevronLeft, Play, Film, MonitorPlay, X, Video as VideoIcon, AudioLines, Subtitles } from 'lucide-react-native';
+import { ChevronLeft, Play, Film, MonitorPlay, X, Settings2, Video as VideoIcon, AudioLines, Subtitles, Info, ExternalLink } from 'lucide-react-native';
 
 const { width, height } = Dimensions.get('window');
 const VIDEO_FORMATS = /\.(mkv|mp4|avi|ts|rmvb|flv|wmv|m2ts|vob|mov|webm|iso)$/i;
@@ -17,10 +18,15 @@ export default function MediaDetailScreen({ route, navigation }) {
   const [davOrigin, setDavOrigin] = useState('');
   const [episodes, setEpisodes] = useState([]);
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
+  const [nfoDetails, setNfoDetails] = useState(movie.nfo || null);
+  
+  // 💡 播放器与控制台状态
   const [activeVideoUrl, setActiveVideoUrl] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [playbackStats, setPlaybackStats] = useState({ position: 0, duration: 0, isBuffering: false });
+  
   const videoRef = useRef(null);
   const playbackStatusRef = useRef(null);
-  const [nfoDetails, setNfoDetails] = useState(movie.nfo || null);
 
   useEffect(() => { loadData(); }, []);
 
@@ -34,7 +40,6 @@ export default function MediaDetailScreen({ route, navigation }) {
         setAuthHeader(auth); setDavOrigin(url.match(/^(https?:\/\/[^\/]+)/)[1]);
         scanEpisodes(url.match(/^(https?:\/\/[^\/]+)/)[1], auth, movie.path);
         
-        // 💡 尝试读取深层 NFO 获取详细参数
         if (!movie.nfo?.fileinfo && movie.path) {
            fetchDetailedNfo(url.match(/^(https?:\/\/[^\/]+)/)[1], auth, movie.path);
         }
@@ -72,7 +77,7 @@ export default function MediaDetailScreen({ route, navigation }) {
             const cleanHref = href.endsWith('/') ? href : href + '/'; queue.push(cleanHref); depthMap[cleanHref] = currentDepth + 1;
           } else if (VIDEO_FORMATS.test(href)) {
             const size = Number(props.getcontentlength || 0);
-            if (size >= MIN_VIDEO_SIZE) { // 💡 过滤 100MB
+            if (size >= MIN_VIDEO_SIZE) {
               found.push({ title: decodeURIComponent(href.split('/').pop()).replace(VIDEO_FORMATS, ''), url: origin + href, size: size });
             }
           }
@@ -82,7 +87,22 @@ export default function MediaDetailScreen({ route, navigation }) {
     } catch (e) { } finally { setLoadingEpisodes(false); }
   };
 
+  // 💡 修复：全屏自动横屏逻辑
+  const onFullscreenUpdate = async ({ fullscreenUpdate }) => {
+    // 0 = PLAYER_WILL_PRESENT (即将全屏), 1 = PLAYER_DID_PRESENT (已经全屏)
+    if (fullscreenUpdate === 0 || fullscreenUpdate === 1) {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+    } 
+    // 2 = PLAYER_WILL_DISMISS (即将退出全屏), 3 = PLAYER_DID_DISMISS (已经退出全屏)
+    else if (fullscreenUpdate === 2 || fullscreenUpdate === 3) {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    }
+  };
+
   const closePlayerAndSaveProgress = async () => {
+    // 退出播放器时，确保屏幕转回竖屏
+    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    
     const status = playbackStatusRef.current;
     if (status && activeVideoUrl) {
       const percent = (status.positionMillis / status.durationMillis) * 100;
@@ -103,6 +123,16 @@ export default function MediaDetailScreen({ route, navigation }) {
     const i = Math.floor(Math.log(bytes) / Math.log(k)); return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const formatTime = (millis) => {
+    if (!millis) return "00:00";
+    const totalSeconds = Math.floor(millis / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
   const renderInfoRow = (label, value) => {
     if (!value) return null;
     return (
@@ -113,7 +143,7 @@ export default function MediaDetailScreen({ route, navigation }) {
     );
   };
 
-  // 💡 极客级数据面板渲染
+  // 💡 极客级数据面板渲染 (在简介下方显示)
   const renderGeekPanel = () => {
     const stream = nfoDetails?.fileinfo?.streamdetails;
     if (!stream) return null;
@@ -124,7 +154,6 @@ export default function MediaDetailScreen({ route, navigation }) {
 
     return (
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 15 }}>
-        {/* 视频数据卡片 */}
         {v && (
           <View style={styles.geekCard}>
             <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 15}}>
@@ -137,8 +166,6 @@ export default function MediaDetailScreen({ route, navigation }) {
             {renderInfoRow('宽高比', v.aspect)}
           </View>
         )}
-
-        {/* 音频数据卡片 */}
         {aList.length > 0 && (
           <View style={styles.geekCard}>
             <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 15}}>
@@ -146,15 +173,13 @@ export default function MediaDetailScreen({ route, navigation }) {
             </View>
             {aList.map((a, i) => (
               <View key={i} style={{marginBottom: 10, paddingBottom: 10, borderBottomWidth: i===aList.length-1?0:1, borderBottomColor:'#374151'}}>
-                {renderInfoRow(`音轨 ${i+1}`, a.language || '未知语言')}
+                {renderInfoRow(`音轨 ${i+1}`, a.language || '未知')}
                 {renderInfoRow('编码', a.codec?.toUpperCase())}
                 {renderInfoRow('声道', a.channels ? `${a.channels} ch` : '未知')}
               </View>
             ))}
           </View>
         )}
-
-        {/* 字幕数据卡片 */}
         {sList.length > 0 && (
           <View style={styles.geekCard}>
             <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 15}}>
@@ -171,20 +196,101 @@ export default function MediaDetailScreen({ route, navigation }) {
     );
   };
 
+  // 💡 播放器设置面板中的流信息
+  const renderStreamDetailsForModal = () => {
+    const stream = nfoDetails?.fileinfo?.streamdetails;
+    if (!stream) return <Text style={styles.consoleText}>未找到媒体流数据</Text>;
+
+    const audios = Array.isArray(stream.audio) ? stream.audio : (stream.audio ? [stream.audio] : []);
+    const subs = Array.isArray(stream.subtitle) ? stream.subtitle : (stream.subtitle ? [stream.subtitle] : []);
+
+    return (
+      <View>
+        <View style={styles.consoleRow}><AudioLines color="#9ca3af" size={18} /><Text style={styles.consoleTitle}>内嵌音轨 ({audios.length})</Text></View>
+        {audios.length > 0 ? audios.map((a, i) => (
+          <TouchableOpacity key={i} style={styles.consoleItem} onPress={() => Alert.alert('提示', '切换 MKV 内嵌音轨建议使用第三方专业播放器。')}>
+            <Text style={styles.consoleItemText}>Track {i+1}: {a.codec?.toUpperCase()} {a.channels}Ch ({a.language||'未知'})</Text>
+          </TouchableOpacity>
+        )) : <Text style={styles.consoleText}>无独立音轨数据</Text>}
+
+        <View style={[styles.consoleRow, { marginTop: 20 }]}><Subtitles color="#9ca3af" size={18} /><Text style={styles.consoleTitle}>内嵌字幕 ({subs.length})</Text></View>
+        {subs.length > 0 ? subs.map((s, i) => (
+          <TouchableOpacity key={i} style={styles.consoleItem} onPress={() => Alert.alert('提示', '内嵌软字幕渲染建议使用第三方专业播放器。')}>
+            <Text style={styles.consoleItemText}>Sub {i+1}: {s.language||'未知'}</Text>
+          </TouchableOpacity>
+        )) : <Text style={styles.consoleText}>无内嵌字幕</Text>}
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
+      {/* 🎬 播放器与覆盖层 */}
       {activeVideoUrl && (
         <View style={styles.playerWrapper}>
-          <TouchableOpacity style={styles.closePlayerBtn} onPress={closePlayerAndSaveProgress}><X color="#ffffff" size={28} /></TouchableOpacity>
-          <Video
-            ref={videoRef} style={styles.videoView} source={{ uri: activeVideoUrl, headers: { 'Authorization': authHeader } }}
-            useNativeControls resizeMode={ResizeMode.CONTAIN} shouldPlay
-            onPlaybackStatusUpdate={(status) => { if (status.isLoaded) playbackStatusRef.current = status; }}
-            positionMillis={movie.positionMillis || 0} 
-          />
+          <View style={styles.playerContainer}>
+            {/* 💡 这里是播放器的悬浮顶栏：有关闭按钮和设置按钮 */}
+            <View style={styles.playerTopBar}>
+              <TouchableOpacity style={styles.iconBtnLayer} onPress={closePlayerAndSaveProgress}>
+                <X color="#ffffff" size={28} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.iconBtnLayer} onPress={() => setShowSettings(true)}>
+                <Settings2 color="#ffffff" size={26} />
+              </TouchableOpacity>
+            </View>
+
+            <Video
+              ref={videoRef} style={styles.videoView} source={{ uri: activeVideoUrl, headers: { 'Authorization': authHeader } }}
+              useNativeControls resizeMode={ResizeMode.CONTAIN} shouldPlay
+              onFullscreenUpdate={onFullscreenUpdate} // 💡 绑定全屏旋转事件
+              onPlaybackStatusUpdate={(status) => { 
+                if (status.isLoaded) {
+                  playbackStatusRef.current = status;
+                  setPlaybackStats({ position: status.positionMillis, duration: status.durationMillis, isBuffering: status.isBuffering });
+                } 
+              }}
+              positionMillis={movie.positionMillis || 0} 
+            />
+          </View>
+
+          {/* ⚙️ 播放控制台 (半透明 Modal) */}
+          <Modal visible={showSettings} transparent={true} animationType="slide">
+            <View style={styles.modalOverlay}>
+              <View style={styles.consolePanel}>
+                <View style={styles.consoleHeader}>
+                  <Text style={{color:'#fff', fontSize:18, fontWeight:'bold'}}>播放控制台</Text>
+                  <TouchableOpacity onPress={() => setShowSettings(false)}><X color="#9ca3af" size={24} /></TouchableOpacity>
+                </View>
+
+                <ScrollView style={{ padding: 20 }}>
+                  <View style={styles.statsCard}>
+                    <View style={styles.consoleRow}><Info color="#3b82f6" size={18} /><Text style={styles.consoleTitle}>实时状态</Text></View>
+                    <Text style={styles.consoleText}>进度: {formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}</Text>
+                    <Text style={styles.consoleText}>缓冲状态: {playbackStats.isBuffering ? '🔄 缓冲中...' : '✅ 流畅'}</Text>
+                  </View>
+
+                  {/* 渲染音轨和字幕列表 */}
+                  {renderStreamDetailsForModal()}
+
+                  {/* 调用第三方播放器方案 */}
+                  <TouchableOpacity style={styles.externalBtn} onPress={() => {
+                    // 把账号密码拼进 URL 里，方便第三方播放器直接解析
+                    const originAuth = `http://${username}:${password}@${davOrigin.replace('http://', '').replace('https://', '')}`;
+                    const fullUrl = activeVideoUrl.replace(davOrigin, originAuth);
+                    Share.share({ message: fullUrl });
+                  }}>
+                    <ExternalLink color="#ffffff" size={18} style={{marginRight: 8}}/>
+                    <Text style={{color:'#fff', fontWeight:'bold'}}>发送给第三方播放器解码</Text>
+                  </TouchableOpacity>
+                  <Text style={{color:'#6b7280', fontSize: 11, textAlign:'center', marginTop:8, marginBottom: 40}}>受原生限制，多音轨与内嵌字幕推荐使用 VLC 或 Infuse 播放。</Text>
+                </ScrollView>
+              </View>
+            </View>
+          </Modal>
         </View>
       )}
 
+      {/* 详情页主视图 */}
       <ScrollView style={styles.scrollView} bounces={false}>
         <View style={styles.heroSection}>
           {movie.posterUrl ? <Image source={{ uri: movie.posterUrl, headers: { 'Authorization': authHeader } }} style={styles.backdropImage} /> : <View style={[styles.backdropImage, { backgroundColor: '#1f2937' }]} />}
@@ -209,7 +315,7 @@ export default function MediaDetailScreen({ route, navigation }) {
           <Text style={styles.plotTitle}>剧情简介</Text>
           <Text style={styles.plotText}>{nfoDetails?.plot || '暂无简介'}</Text>
           
-          {/* 💡 渲染你想要的横向极客详情面板 */}
+          {/* 💡 这里就是复刻你截图中的横向三列极客面板！ */}
           {renderGeekPanel()}
         </View>
 
@@ -221,7 +327,7 @@ export default function MediaDetailScreen({ route, navigation }) {
             <View style={styles.centerBox}><MonitorPlay color="#4b5563" size={48} /><Text style={{color:'#9ca3af', marginTop:10}}>未找到支持的视频文件 (可能小于100MB或格式不支持)</Text></View>
           ) : (
             episodes.map((ep, index) => (
-              <TouchableOpacity key={index} style={styles.episodeCard} onPress={() => setActiveVideoUrl(ep.url)}>
+              <TouchableOpacity key={index} style={styles.episodeCard} onPress={() => handlePlay(ep.url)}>
                 <View style={styles.episodeIconBox}><Play color="#ffffff" size={20} fill="#ffffff" /></View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.episodeTitle} numberOfLines={2}>{ep.title}</Text>
@@ -258,7 +364,7 @@ const styles = StyleSheet.create({
   plotTitle: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginBottom: 12 },
   plotText: { color: '#9ca3af', fontSize: 14, lineHeight: 22 },
   
-  // 💡 极客卡片样式 (复刻你的截图)
+  // 💡 极客横向卡片样式
   geekCard: { backgroundColor: 'rgba(31, 41, 55, 0.6)', padding: 16, borderRadius: 12, width: 220, marginRight: 12, borderWidth: 1, borderColor: 'rgba(55, 65, 81, 0.8)' },
   geekTitle: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
 
@@ -269,7 +375,22 @@ const styles = StyleSheet.create({
   episodeTitle: { color: '#e5e7eb', fontSize: 15, fontWeight: 'bold', marginBottom: 4 },
   episodeSub: { color: '#6b7280', fontSize: 12 },
   
+  // 💡 播放器与控制台样式
   playerWrapper: { position: 'absolute', top: 0, left: 0, width: width, height: height, zIndex: 999, backgroundColor: '#000', justifyContent: 'center' },
-  closePlayerBtn: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 20, zIndex: 1000, padding: 8, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 20 },
+  playerContainer: { flex: 1, justifyContent: 'center', position: 'relative' },
+  playerTopBar: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, left: 0, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, zIndex: 1000 },
+  iconBtnLayer: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
   videoView: { width: '100%', height: height * 0.4 }, 
+  
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  consolePanel: { backgroundColor: '#1f2937', height: height * 0.65, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  consoleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#374151' },
+  statsCard: { backgroundColor: '#111827', padding: 16, borderRadius: 12, marginBottom: 20 },
+  consoleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  consoleTitle: { color: '#e5e7eb', fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
+  consoleText: { color: '#9ca3af', fontSize: 14, marginBottom: 6 },
+  consoleItem: { paddingVertical: 12, paddingHorizontal: 16, backgroundColor: '#374151', borderRadius: 8, marginBottom: 8 },
+  consoleItemText: { color: '#e5e7eb', fontSize: 14, fontWeight: '500' },
+  
+  externalBtn: { flexDirection: 'row', backgroundColor: '#8b5cf6', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginTop: 20 }
 });
