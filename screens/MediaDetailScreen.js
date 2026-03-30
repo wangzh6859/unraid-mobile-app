@@ -158,7 +158,7 @@ export default function MediaDetailScreen({ route, navigation }) {
     }
   };
 
-  // 💡 终极硬核唤醒引擎：绕过 URL 拦截，直接操控系统底层 Intent
+  // 💡 终极一键唤醒：砍掉中间弹窗，直接呼出系统原生的“打开方式”面板
   const handleExternalPlay = async () => {
     if (!activeVideoUrl) return;
     
@@ -170,37 +170,26 @@ export default function MediaDetailScreen({ route, navigation }) {
     const authOrigin = `${protocol}${safeUser}:${safePass}@${cleanOrigin}`;
     const fullUrl = activeVideoUrl.replace(davOrigin, authOrigin);
 
-    Alert.alert(
-      '选择外部播放器',
-      '请选择系统播放器，或强行呼叫 MX Player/VLC：',
-      [
-        { 
-          text: '系统自由选择 (推荐)', 
-          onPress: async () => {
-            if (Platform.OS === 'android') {
-              try {
-                // 强制要求系统调出所有能放 video/* 的软件让你选
-                await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
-                  data: fullUrl,
-                  type: 'video/*',
-                });
-              } catch (e) {
-                Linking.openURL(fullUrl);
-              }
-            } else {
-              Linking.openURL(fullUrl);
-            }
-          }
-        },
-        { text: '取消', style: 'cancel' }
-      ]
-    );
+    if (Platform.OS === 'android') {
+      try {
+        // 🔥 直接向安卓底层下达 VIEW 视频的死命令，强制唤出你截图里的原生面板！
+        await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+          data: fullUrl,
+          type: 'video/*',
+        });
+      } catch (e) {
+        Linking.openURL(fullUrl);
+      }
+    } else {
+      // iOS 设备默认交由系统处理
+      Linking.openURL(fullUrl);
+    }
   };
 
   const handleTrackSelect = (type, name) => {
     Alert.alert(
       `切换${type === 'audio' ? '音轨' : '字幕'}`,
-      `您选择了: ${name}\n\n由于系统原生引擎限制，直接在 App 内切换 MKV 内嵌流可能会失效。请点击【呼叫外部播放器】使用专业解码器接管。`,
+      `您选择了: ${name}\n\n由于系统原生引擎限制，直接在 App 内切换 MKV 内嵌流可能会失效。请点击【呼叫外部播放器】直接进入系统播放器选择面板。`,
       [
         { text: '取消', style: 'cancel' },
         { text: '呼叫外部播放器', onPress: handleExternalPlay, style: 'default' }
