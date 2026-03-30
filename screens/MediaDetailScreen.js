@@ -6,17 +6,18 @@ import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { XMLParser } from 'fast-xml-parser';
 import base64 from 'base-64';
-import { ChevronLeft, Play, Film, MonitorPlay, X, Settings2, Video as VideoIcon, AudioLines, Subtitles, Info, ExternalLink } from 'lucide-react-native';
+import { ChevronLeft, Play, Film, MonitorPlay, X, Settings2, Video as VideoIcon, AudioLines, Subtitles, Info, ExternalLink, CheckCircle2 } from 'lucide-react-native';
 
 const { width, height } = Dimensions.get('window');
 const VIDEO_FORMATS = /\.(mkv|mp4|avi|ts|rmvb|flv|wmv|m2ts|vob|mov|webm|iso)$/i;
 
 export default function MediaDetailScreen({ route, navigation }) {
-  // 💡 防爆盾：确保 movie 对象绝对存在
   const movie = route?.params?.movie || {}; 
   
   const [authHeader, setAuthHeader] = useState('');
   const [davOrigin, setDavOrigin] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [episodes, setEpisodes] = useState([]);
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
   const [nfoDetails, setNfoDetails] = useState(movie.nfo || null);
@@ -31,9 +32,7 @@ export default function MediaDetailScreen({ route, navigation }) {
 
   useEffect(() => { 
     isMounted.current = true;
-    if (movie.path || movie.videoUrl) {
-      loadData(); 
-    }
+    if (movie.path || movie.videoUrl) loadData(); 
     return () => { isMounted.current = false; };
   }, []);
 
@@ -43,6 +42,7 @@ export default function MediaDetailScreen({ route, navigation }) {
       const user = await AsyncStorage.getItem('@media_dav_user');
       const pass = await AsyncStorage.getItem('@media_dav_pass');
       if (url && user && pass) {
+        setUsername(user); setPassword(pass);
         const auth = `Basic ${base64.encode(`${user}:${pass}`)}`;
         setAuthHeader(auth); 
         const origin = url.match(/^(https?:\/\/[^\/]+)/)?.[1] || '';
@@ -95,17 +95,16 @@ export default function MediaDetailScreen({ route, navigation }) {
             queue.push(cleanHref); depthMap[cleanHref] = currentDepth + 1;
           } else if (VIDEO_FORMATS.test(href)) {
             const size = Number(props.getcontentlength || 0);
-            if (size >= 100 * 1024 * 1024) { // 过滤小于 100MB 的视频
+            if (size >= 100 * 1024 * 1024) { 
               found.push({ title: decodeURIComponent(href.split('/').pop() || '').replace(VIDEO_FORMATS, ''), url: origin + href, size: size });
             }
           }
         });
       }
       if (isMounted.current) setEpisodes(found.sort((a, b) => a.title.localeCompare(b.title)));
-    } catch (e) { console.log('扫描集数出错', e); } finally { if (isMounted.current) setLoadingEpisodes(false); }
+    } catch (e) {} finally { if (isMounted.current) setLoadingEpisodes(false); }
   };
 
-  // 💡 安全的屏幕旋转控制
   const safeLockLandscape = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE); } catch(e){} };
   const safeLockPortrait = async () => { try { await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP); } catch(e){} };
 
@@ -115,7 +114,7 @@ export default function MediaDetailScreen({ route, navigation }) {
   };
 
   const closePlayerAndSaveProgress = async () => {
-    await safeLockPortrait(); // 退出时强制竖屏
+    await safeLockPortrait(); 
     const status = playbackStatusRef.current;
     if (status && activeVideoUrl) {
       const percent = (status.positionMillis / status.durationMillis) * 100;
@@ -128,14 +127,44 @@ export default function MediaDetailScreen({ route, navigation }) {
         } catch(e) {}
       }
     }
-    setActiveVideoUrl(null); playbackStatusRef.current = null;
+    setActiveVideoUrl(null); playbackStatusRef.current = null; setShowSettings(false);
   };
 
-  // 💡 顶部主播放按钮的逻辑
   const handleMainPlay = () => {
     if (movie.videoUrl) setActiveVideoUrl(movie.videoUrl);
-    else if (episodes.length > 0) setActiveVideoUrl(episodes[0].url); // 剧集默认播放第一集
-    else Alert.alert('提示', '未找到可播放的视频源或正在扫描中...');
+    else if (episodes.length > 0) setActiveVideoUrl(episodes[0].url); 
+    else Alert.alert('提示', '未找到可播放的视频源');
+  };
+
+  // 💡 安全的调用第三方播放器分享 (修复闪退问题)
+  const handleExternalPlay = async () => {
+    try {
+      if (!activeVideoUrl) return;
+      // 必须对账号密码进行 URL 编码，防止特殊字符（如 @, /）破坏 URL 结构导致闪退
+      const safeUser = encodeURIComponent(username);
+      const safePass = encodeURIComponent(password);
+      const cleanOrigin = davOrigin.replace(/^https?:\/\//, '');
+      const protocol = davOrigin.startsWith('https') ? 'https://' : 'http://';
+      
+      const authOrigin = `${protocol}${safeUser}:${safePass}@${cleanOrigin}`;
+      const fullUrl = activeVideoUrl.replace(davOrigin, authOrigin);
+      
+      await Share.share({ message: fullUrl, title: '外部播放器打开' });
+    } catch (error) {
+      Alert.alert('调用失败', error.message);
+    }
+  };
+
+  // 💡 点击音轨/字幕时的提示逻辑
+  const handleTrackSelect = (type, name) => {
+    Alert.alert(
+      `切换${type === 'audio' ? '音轨' : '字幕'}`,
+      `您选择了: ${name}\n\n由于系统原生引擎的限制，直接在 App 内切换 MKV 内嵌流可能会失效。是否复制视频直链，使用专业的第三方播放器 (如 VLC, Infuse) 来获得完美体验？`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '发送至外部播放器', onPress: handleExternalPlay, style: 'default' }
+      ]
+    );
   };
 
   const formatBytes = (bytes) => {
@@ -153,22 +182,22 @@ export default function MediaDetailScreen({ route, navigation }) {
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  const renderInfoRow = (label, value) => {
-    if (!value) return null;
-    return (
-      <View style={{ flexDirection: 'row', marginBottom: 6 }}>
-        <Text style={{ color: '#9ca3af', width: 80, fontSize: 13 }}>{label}</Text>
-        <Text style={{ color: '#e5e7eb', flex: 1, fontSize: 13 }}>{value}</Text>
-      </View>
-    );
-  };
-
+  // 渲染极客详情卡片
   const renderGeekPanel = () => {
     const stream = nfoDetails?.fileinfo?.streamdetails;
     if (!stream) return null;
     const v = stream.video;
     const aList = Array.isArray(stream.audio) ? stream.audio : (stream.audio ? [stream.audio] : []);
     const sList = Array.isArray(stream.subtitle) ? stream.subtitle : (stream.subtitle ? [stream.subtitle] : []);
+
+    const renderInfoRow = (label, value) => {
+      if (!value) return null;
+      return (
+        <View style={{ flexDirection: 'row', marginBottom: 6 }}>
+          <Text style={{ color: '#9ca3af', width: 80, fontSize: 13 }}>{label}</Text><Text style={{ color: '#e5e7eb', flex: 1, fontSize: 13 }}>{value}</Text>
+        </View>
+      );
+    };
 
     return (
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 15 }}>
@@ -187,7 +216,7 @@ export default function MediaDetailScreen({ route, navigation }) {
             <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 15}}><AudioLines color="#ffffff" size={18} /><Text style={styles.geekTitle}>音频</Text></View>
             {aList.map((a, i) => (
               <View key={i} style={{marginBottom: 10, paddingBottom: 10, borderBottomWidth: i===aList.length-1?0:1, borderBottomColor:'#374151'}}>
-                {renderInfoRow(`音轨 ${i+1}`, a.language || '未知')}
+                {renderInfoRow(`音轨 ${i+1}`, a.language || '未知语言')}
                 {renderInfoRow('编码', a.codec?.toUpperCase())}
                 {renderInfoRow('声道', a.channels ? `${a.channels} ch` : null)}
               </View>
@@ -201,6 +230,48 @@ export default function MediaDetailScreen({ route, navigation }) {
           </View>
         )}
       </ScrollView>
+    );
+  };
+
+  // 💡 播放器设置面板：渲染可交互的音轨和字幕列表
+  const renderTrackSelectors = () => {
+    const stream = nfoDetails?.fileinfo?.streamdetails;
+    if (!stream) return <Text style={styles.consoleText}>当前视频未提供轨道数据</Text>;
+    
+    const audios = Array.isArray(stream.audio) ? stream.audio : (stream.audio ? [stream.audio] : []);
+    const subs = Array.isArray(stream.subtitle) ? stream.subtitle : (stream.subtitle ? [stream.subtitle] : []);
+
+    return (
+      <View>
+        {/* 音轨切换区域 */}
+        <View style={styles.consoleRow}><AudioLines color="#9ca3af" size={18} /><Text style={styles.consoleTitle}>选择音轨 ({audios.length})</Text></View>
+        {audios.length > 0 ? audios.map((a, i) => (
+          <TouchableOpacity key={i} style={styles.trackItem} onPress={() => handleTrackSelect('audio', a.language || `Track ${i+1}`)}>
+            <View style={styles.radioCircle}>
+              {i === 0 && <View style={styles.radioInner} />} {/* 默认选中第一个 */}
+            </View>
+            <Text style={styles.trackText}>Track {i+1}: {a.language || '未知语言'} ({a.codec?.toUpperCase()})</Text>
+          </TouchableOpacity>
+        )) : <Text style={styles.consoleText}>无独立音轨</Text>}
+
+        {/* 字幕切换区域 */}
+        <View style={[styles.consoleRow, { marginTop: 24 }]}><Subtitles color="#9ca3af" size={18} /><Text style={styles.consoleTitle}>选择字幕 ({subs.length})</Text></View>
+        {subs.length > 0 ? (
+          <>
+            <TouchableOpacity style={styles.trackItem} onPress={() => {}}>
+              <View style={styles.radioCircle}></View><Text style={styles.trackText}>关闭字幕</Text>
+            </TouchableOpacity>
+            {subs.map((s, i) => (
+              <TouchableOpacity key={i} style={styles.trackItem} onPress={() => handleTrackSelect('sub', s.language || `Sub ${i+1}`)}>
+                <View style={styles.radioCircle}>
+                  {i === 0 && <View style={styles.radioInner} />}
+                </View>
+                <Text style={styles.trackText}>字幕 {i+1}: {s.language || '未知'} </Text>
+              </TouchableOpacity>
+            ))}
+          </>
+        ) : <Text style={styles.consoleText}>无内嵌字幕</Text>}
+      </View>
     );
   };
 
@@ -227,28 +298,31 @@ export default function MediaDetailScreen({ route, navigation }) {
             />
           </View>
 
+          {/* ⚙️ 播放控制台 */}
           <Modal visible={showSettings} transparent={true} animationType="slide">
             <View style={styles.modalOverlay}>
               <View style={styles.consolePanel}>
                 <View style={styles.consoleHeader}>
-                  <Text style={{color:'#fff', fontSize:18, fontWeight:'bold'}}>播放控制台</Text>
+                  <Text style={{color:'#fff', fontSize:18, fontWeight:'bold'}}>播放设置</Text>
                   <TouchableOpacity onPress={() => setShowSettings(false)}><X color="#9ca3af" size={24} /></TouchableOpacity>
                 </View>
                 <ScrollView style={{ padding: 20 }}>
                   <View style={styles.statsCard}>
                     <View style={styles.consoleRow}><Info color="#3b82f6" size={18} /><Text style={styles.consoleTitle}>实时状态</Text></View>
-                    <Text style={styles.consoleText}>进度: {formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}</Text>
-                    <Text style={styles.consoleText}>缓冲状态: {playbackStats.isBuffering ? '🔄 缓冲中...' : '✅ 流畅'}</Text>
+                    <Text style={styles.consoleText}>播放进度: {formatTime(playbackStats.position)} / {formatTime(playbackStats.duration)}</Text>
+                    <Text style={styles.consoleText}>网络缓冲: {playbackStats.isBuffering ? '🔄 缓冲中...' : '✅ 稳定'}</Text>
                   </View>
-                  <TouchableOpacity style={styles.externalBtn} onPress={() => {
-                    const originAuth = `http://${username}:${password}@${davOrigin.replace('http://', '').replace('https://', '')}`;
-                    const fullUrl = activeVideoUrl.replace(davOrigin, originAuth);
-                    Share.share({ message: fullUrl });
-                  }}>
+
+                  {/* 💡 渲染带有单选框交互的音轨/字幕面板 */}
+                  {renderTrackSelectors()}
+
+                  <View style={styles.divider} />
+                  
+                  <TouchableOpacity style={styles.externalBtn} onPress={handleExternalPlay}>
                     <ExternalLink color="#ffffff" size={18} style={{marginRight: 8}}/>
-                    <Text style={{color:'#fff', fontWeight:'bold'}}>发送给第三方播放器解码</Text>
+                    <Text style={{color:'#fff', fontWeight:'bold'}}>发送至第三方专业播放器</Text>
                   </TouchableOpacity>
-                  <Text style={{color:'#6b7280', fontSize: 11, textAlign:'center', marginTop:8, marginBottom:40}}>受原生限制，多音轨与内嵌字幕推荐复制直链至 VLC 等播放器。</Text>
+                  <Text style={{color:'#6b7280', fontSize: 11, textAlign:'center', marginTop:8, marginBottom:40}}>* 受限于原生流媒体解码器能力，如遇切换失效，请使用第三方播放器处理 MKV 内嵌数据。</Text>
                 </ScrollView>
               </View>
             </View>
@@ -276,7 +350,6 @@ export default function MediaDetailScreen({ route, navigation }) {
           </View>
         </View>
 
-        {/* 💡 新增：核心的主播放按钮 */}
         <View style={styles.actionSection}>
           <TouchableOpacity style={styles.mainPlayBtn} onPress={handleMainPlay}>
             <Play color="#ffffff" size={22} fill="#ffffff" />
@@ -331,7 +404,6 @@ const styles = StyleSheet.create({
   ratingText: { color: '#ffffff', fontSize: 12, fontWeight: 'bold' },
   typeBadge: { borderWidth: 1, borderColor: '#6b7280', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, color: '#9ca3af', fontSize: 12 },
   
-  // 💡 播放按钮样式
   actionSection: { paddingHorizontal: 20, marginTop: 15, marginBottom: 10 },
   mainPlayBtn: { backgroundColor: '#e50914', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 8, elevation: 3 },
   mainPlayText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
@@ -357,11 +429,19 @@ const styles = StyleSheet.create({
   videoView: { width: '100%', height: height * 0.4 }, 
   
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  consolePanel: { backgroundColor: '#1f2937', height: height * 0.65, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  consolePanel: { backgroundColor: '#1f2937', height: height * 0.7, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   consoleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#374151' },
   statsCard: { backgroundColor: '#111827', padding: 16, borderRadius: 12, marginBottom: 20 },
   consoleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   consoleTitle: { color: '#e5e7eb', fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
   consoleText: { color: '#9ca3af', fontSize: 14, marginBottom: 6 },
-  externalBtn: { flexDirection: 'row', backgroundColor: '#8b5cf6', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginTop: 20 }
+  
+  // 💡 音轨字幕单选框样式
+  trackItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#374151' },
+  radioCircle: { height: 20, width: 20, borderRadius: 10, borderWidth: 2, borderColor: '#3b82f6', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  radioInner: { height: 10, width: 10, borderRadius: 5, backgroundColor: '#3b82f6' },
+  trackText: { color: '#e5e7eb', fontSize: 15 },
+  divider: { height: 1, backgroundColor: '#374151', marginVertical: 20 },
+  
+  externalBtn: { flexDirection: 'row', backgroundColor: '#8b5cf6', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }
 });
