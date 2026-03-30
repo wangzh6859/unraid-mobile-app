@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { XMLParser } from 'fast-xml-parser';
 import base64 from 'base-64';
 import { ChevronLeft, Play, Film, MonitorPlay, X, Settings2, Video as VideoIcon, AudioLines, Subtitles, Info, ExternalLink, Clock } from 'lucide-react-native';
+import * as IntentLauncher from 'expo-intent-launcher';
 
 const { width, height } = Dimensions.get('window');
 const VIDEO_FORMATS = /\.(mkv|mp4|avi|ts|rmvb|flv|wmv|m2ts|vob|mov|webm|iso)$/i;
@@ -174,14 +175,20 @@ export default function MediaDetailScreen({ route, navigation }) {
       [
         { 
           text: '系统自由选择 (推荐)', 
-          onPress: () => {
+          onPress: async () => {
             if (Platform.OS === 'android') {
-              // 🔥 核心魔法：使用 Android Intent 语法，强行指定 type=video/*
-              // 这样安卓的底层只会呼叫“视频播放器”类的 App，浏览器绝对不会弹出来下载！
-              const urlWithoutScheme = fullUrl.replace(/^https?:\/\//, '');
-              const scheme = fullUrl.startsWith('https') ? 'https' : 'http';
-              const intentUrl = `intent://${urlWithoutScheme}#Intent;scheme=${scheme};type=video/*;action=android.intent.action.VIEW;end`;
-              Linking.openURL(intentUrl).catch(() => Linking.openURL(fullUrl));
+              try {
+                // 🔥 真正的底层魔法：直接命令 Android 启动一个 VIEW 动作
+                // 强制将数据声明为 fullUrl，强制类型声明为 video/*
+                // 这样写，Android 底层的 setDataAndType 会被触发，浏览器绝对无法接管！
+                await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+                  data: fullUrl,
+                  type: 'video/*',
+                });
+              } catch (e) {
+                // 如果极其罕见地失败了，再用 Linking 兜底
+                Linking.openURL(fullUrl);
+              }
             } else {
               Linking.openURL(fullUrl);
             }
