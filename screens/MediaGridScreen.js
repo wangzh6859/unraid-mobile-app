@@ -302,6 +302,37 @@ export default function MediaGridScreen({ navigation }) {
           numColumns={3}
           ListHeaderComponent={
             <>
+              {/* 🚀 这里是刚才遗漏的“继续观看”模块 */}
+              {continueWatching.length > 0 && !isSearching && (
+                <View style={{ marginTop: 10, marginBottom: 5 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 16, marginBottom: 12 }}>
+                    <Clock color="#f59e0b" size={18} />
+                    <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: 'bold', marginLeft: 6 }}>继续观看</Text>
+                  </View>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingLeft: 16 }}>
+                    {continueWatching.map((item, idx) => (
+                      <TouchableOpacity 
+                        key={idx} 
+                        style={{ width: 140, marginRight: 12 }} 
+                        // 点击历史记录，带着进度信息直接杀回详情页
+                        onPress={() => navigation.navigate('MediaDetail', { movie: item })}
+                      >
+                        {/* 注意这里加上了 Auth 验证，否则海报加载不出来 */}
+                        <Image 
+                          source={{ uri: item.posterUrl, headers: { 'Authorization': `Basic ${base64.encode(`${username}:${password}`)}` } }} 
+                          style={{ width: 140, height: 80, borderRadius: 8, backgroundColor: '#374151' }} 
+                        />
+                        {/* 进度条 */}
+                        <View style={{ height: 3, backgroundColor: '#374151', width: '100%', marginTop: 4, borderRadius: 2, overflow: 'hidden' }}>
+                          <View style={{ height: '100%', backgroundColor: '#f59e0b', width: `${item.percent}%` }} />
+                        </View>
+                        <Text style={{ color: '#e5e7eb', fontSize: 12, marginTop: 4, fontWeight: '500' }} numberOfLines={1}>{item.title}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+              {/* 🚀 插入结束 */}
               {!isSearching && (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 15, paddingHorizontal: 16, maxHeight: 40 }}>
                   <TouchableOpacity onPress={() => setActiveTab('all')} style={[styles.tab, activeTab === 'all' && styles.tabActive]}><Text style={styles.tabText}>全部</Text></TouchableOpacity>
