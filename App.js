@@ -12,8 +12,6 @@ import DockerDetailsScreen from './screens/DockerDetailsScreen';
 import VmDetailsScreen from './screens/VmDetailsScreen';
 import StorageDetailsScreen from './screens/StorageDetailsScreen';
 import SmartDetailsScreen from './screens/SmartDetailsScreen';
-// 原来的 MediaScreen 可以先注释掉
-// import MediaScreen from './screens/MediaScreen';
 import MediaGridScreen from './screens/MediaGridScreen';
 import MediaDetailScreen from './screens/MediaDetailScreen';
 import FilesScreen from './screens/FilesScreen';
@@ -21,8 +19,7 @@ import FilesScreen from './screens/FilesScreen';
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-
-// 首页的堆栈路由
+// 💡 首页专属的内部堆栈 (去掉了写错位置的 MediaDetail)
 function HomeStack() {
   return (
     <Stack.Navigator
@@ -37,41 +34,56 @@ function HomeStack() {
       <Stack.Screen name="VM详情" component={VmDetailsScreen} options={{ title: '虚拟机' }} />
       <Stack.Screen name="存储详情" component={StorageDetailsScreen} options={{ title: '磁盘存储详情' }} />
       <Stack.Screen name="SMART详情" component={SmartDetailsScreen} options={{ title: 'S.M.A.R.T. 诊断' }} />
-      <Stack.Screen name="MediaDetail" component={MediaDetailScreen} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 }
 
-// 底部主导航
+// 💡 将原来的 Tab 导航器打包成一个独立的“底座组件”
+function MainTabs() {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        tabBarIcon: ({ color, size }) => {
+          if (route.name === '首页') return <Home color={color} size={size} />;
+          if (route.name === '文件') return <Folder color={color} size={size} />;
+          if (route.name === '影音') return <Film color={color} size={size} />;
+          if (route.name === '设置') return <Settings color={color} size={size} />;
+        },
+        tabBarActiveTintColor: '#60a5fa',
+        tabBarInactiveTintColor: '#9ca3af',
+        headerStyle: { backgroundColor: '#1f2937' },
+        headerTintColor: '#ffffff',
+        tabBarStyle: { backgroundColor: '#1f2937', borderTopColor: '#374151' },
+        sceneContainerStyle: { backgroundColor: '#111827' },
+      })}
+    >
+      <Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
+      <Tab.Screen name="文件" component={FilesScreen} />
+      <Tab.Screen name="影音" component={MediaGridScreen} options={{ headerShown: false }} />
+      <Tab.Screen name="设置" component={SettingsScreen} />
+    </Tab.Navigator>
+  );
+}
+
+// 🚀 真正的 App 顶级入口
 export default function App() {
   return (
     <NavigationContainer>
-      <Tab.Navigator
-        screenOptions={({ route }) => ({
-          tabBarIcon: ({ color, size }) => {
-            if (route.name === '首页') return <Home color={color} size={size} />;
-            if (route.name === '文件') return <Folder color={color} size={size} />;
-            if (route.name === '影音') return <Film color={color} size={size} />;
-            if (route.name === '设置') return <Settings color={color} size={size} />;
-          },
-          tabBarActiveTintColor: '#60a5fa',
-          tabBarInactiveTintColor: '#9ca3af',
-          headerStyle: { backgroundColor: '#1f2937' },
-          headerTintColor: '#ffffff',
-          tabBarStyle: { backgroundColor: '#1f2937', borderTopColor: '#374151' },
-          sceneContainerStyle: { backgroundColor: '#111827' },
-        })}
-      >
-        <Tab.Screen name="首页" component={HomeStack} options={{ headerShown: false }} />
-        <Tab.Screen name="文件" component={FilesScreen} />
-        {/* 将原来的 MediaScreen 替换为新的 MediaGridScreen */}
-<Tab.Screen 
-  name="影音" 
-  component={MediaGridScreen} 
-  options={{ headerShown: false }} 
-/>
-        <Tab.Screen name="设置" component={SettingsScreen} />
-      </Tab.Navigator>
+      <Stack.Navigator>
+        {/* 第一层：底座（包含底部那 4 个按钮的页面） */}
+        <Stack.Screen 
+          name="MainTabs" 
+          component={MainTabs} 
+          options={{ headerShown: false }} 
+        />
+        
+        {/* 第二层：全屏显示的详情页。它弹出时会完美覆盖掉底座的 Tab 栏！ */}
+        <Stack.Screen 
+          name="MediaDetail" 
+          component={MediaDetailScreen} 
+          options={{ headerShown: false }} 
+        />
+      </Stack.Navigator>
     </NavigationContainer>
   );
 }
